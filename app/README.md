@@ -12,7 +12,7 @@ npm run tauri dev        # development: opens the bar, hot-reloads the UI
 ```
 
 The bar starts the search service for you (`uv run grain serve` in `engine\`, hidden window,
-log in `engine\data\service.log`). If it is already running, it just connects to it.
+log in `%LOCALAPPDATA%\GrainSearch\logs\service.log`). If it is already running, it just connects to it.
 
 Make a real app + installer:
 ```powershell
@@ -41,13 +41,13 @@ service if the bar started it).
 ## Settings (optional)
 
 Copy `settings.example.json` to `settings.json` (this folder) or to
-`%APPDATA%\app.grainsearch.desktop\settings.json`:
+`%APPDATA%\GrainSearch\settings.json`:
 
 | Key | Default | |
 |---|---|---|
 | `hotkey` | `Alt+Space` | e.g. `Ctrl+Space`, `Alt+Shift+Space` |
 | `glass` | `false` | `true` = real Windows acrylic blur (Windows draws small square-ish corners); `false` = macOS-style rounded frosted bar |
-| `project_dir` | `..\engine` | the engine folder (where its `pyproject.toml` and `data\` are) |
+| `project_dir` | `..\engine` | the engine folder (where its `pyproject.toml` is), for development builds |
 | `uv` | `uv` | full path to `uv.exe` if it isn't on PATH |
 
 **Alt+Space taken?** PowerToys Run uses it too: PowerToys → PowerToys Run → change or disable its
@@ -59,4 +59,4 @@ shortcut, or set another `hotkey` here. If the hotkey can't be registered, the b
 uv run grain serve                           # in engine\
 npm run dev                                  # in app\
 ```
-Open `http://localhost:1420/?url=http://127.0.0.1:8766&token=<token from engine\data\service.json>`.
+Open `http://localhost:1420/?url=http://127.0.0.1:8766&token=<token from %LOCALAPPDATA%\GrainSearch\service.json>`.

@@ -7,7 +7,8 @@
 * Keeps the index up to date in a background thread: one incremental pass at start,
   then live updates from a file watcher. Pauses automatically while a full-screen
   app/game is running or on battery.
-* Listens on 127.0.0.1 only; every request needs the secret token in data/service.json.
+* Listens on 127.0.0.1 only; every request needs the secret token from service.json
+  (in the app data folder, see paths.py).
 """
 
 from __future__ import annotations
@@ -392,6 +393,9 @@ class SearchService:
                     "uptime_s": round(time.time() - svc.started),
                     "device": svc.embedder.device_desc,
                     "model": svc.embedder.model_id,
+                    "setup_needed": not svc.cfg.roots,
+                    "folders": list(svc.cfg.roots),
+                    "config_file": str(svc.cfg.config_path) if svc.cfg.config_path else None,
                     "index": st,
                     "indexer": None
                     if ix is None
@@ -561,7 +565,7 @@ def running_service(cfg: Config) -> dict | None:
     import urllib.request
 
     try:
-        info = json.loads((cfg.data_dir / "service.json").read_text(encoding="utf-8"))
+        info = json.loads(cfg.service_path.read_text(encoding="utf-8"))
         with urllib.request.urlopen(info["url"] + "/health", timeout=1.5) as r:
             return info if r.status == 200 else None
     except Exception:
@@ -575,9 +579,9 @@ def port_in_use(host: str, port: int) -> bool:
 
 
 def write_service_file(cfg: Config, host: str, port: int, token: str) -> Path:
-    """data/service.json tells the Grain Search window where the service is and how to authenticate."""
-    cfg.data_dir.mkdir(parents=True, exist_ok=True)
-    path = cfg.data_dir / "service.json"
+    """service.json tells the Grain Search window where the service is and how to authenticate."""
+    path = cfg.service_path
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(
         json.dumps({"url": f"http://{host}:{port}", "token": token, "pid": os.getpid(), "version": __version__}),
@@ -657,7 +661,7 @@ def serve(
     finally:
         svc.shutdown()
         try:
-            (cfg.data_dir / "service.json").unlink()
+            cfg.service_path.unlink()
         except OSError:
             pass
     return 0

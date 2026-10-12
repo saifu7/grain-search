@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 
 from .chunker import chunk_segments
 from .config import Config
-from .crawler import Excluder, FileInfo, crawl, quick_hash
+from .crawler import Excluder, FileInfo, crawl, excluder_for, quick_hash
 from .embedder import Embedder
 from .extractors import extract, kind_of
 from .extractors.image import TOO_SMALL
@@ -324,7 +324,7 @@ def index_paths(
     t0 = time.perf_counter()
     rep = IndexReport()
     state = state or IndexState()
-    excluded = Excluder(cfg.excludes)
+    excluded = excluder_for(cfg)
     paths = list(paths)
 
     # 1) renames/moves reported by the watcher: update rows, no re-embedding

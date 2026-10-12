@@ -9,9 +9,18 @@ service (`grain serve`) that the Windows app talks to. Everything runs locally.
 ```powershell
 cd engine
 setx UV_CACHE_DIR "D:\cache\uv"       # optional: keep uv's downloads off a full C: drive
-uv sync                                 # installs everything, incl. the CUDA build of PyTorch
-copy config.example.yaml config.yaml    # then edit the folders in config.yaml
+uv sync --locked                        # installs everything, incl. the CUDA build of PyTorch
+uv run grain folders add "%USERPROFILE%\Documents"   # choose what to index (nothing is built in)
+uv run grain folders add D:\Photos
+uv run grain config                     # shows where settings and the index are kept
 ```
+
+Settings live in `%APPDATA%\GrainSearch\config.json` and the index in
+`%LOCALAPPDATA%\GrainSearch\index\`. Manage folders and exclusions with
+`grain folders [add|remove] FOLDER` and `grain exclude [add|remove] FOLDER_OR_PATTERN`
+(e.g. `*.log`). Every option is described in [config.example.yaml](config.example.yaml); the same
+keys go into `config.json`. Set `GRAIN_SEARCH_HOME=D:\some\folder` to keep everything in one
+folder instead (a portable or test profile).
 
 PyTorch is installed from the CUDA 12.8 build: it uses your NVIDIA GPU when there is one and
 runs on the CPU otherwise. Check with:
@@ -34,7 +43,7 @@ uv run grain status
 
 Results come in two groups: **Contains your text** (exact phrase, all words, or file name) and
 **Related by meaning** (similar topic, but your words are *not* in the file). Related results are
-hidden when they're weak; tune `text_min_score` in `config.yaml` to see more or fewer.
+hidden when they're weak; tune `text_min_score` (under `search` in `config.json`) to see more or fewer.
 
 **Search tips**
 | Type | Meaning |
@@ -58,12 +67,13 @@ uv run grain serve
 
 Keeps EmbeddingGemma 2 loaded (GPU), indexes in the background and re-indexes files the moment
 they change (pauses automatically while a game / full-screen app runs or on battery).
-Listens on `127.0.0.1:8766` only; the address and a secret token are written to `data\service.json`.
+Listens on `127.0.0.1:8766` only; the address and a secret token are written to
+`%LOCALAPPDATA%\GrainSearch\service.json`, the log to `%LOCALAPPDATA%\GrainSearch\logs\`.
 Stop it with Ctrl+C.
 
 Try it from another terminal:
 ```powershell
-$s = Get-Content data\service.json | ConvertFrom-Json
+$s = Get-Content "$env:LOCALAPPDATA\GrainSearch\service.json" | ConvertFrom-Json
 curl.exe -N -H "Authorization: Bearer $($s.token)" "$($s.url)/search?q=bank%20holiday"
 curl.exe -H "Authorization: Bearer $($s.token)" "$($s.url)/status"
 ```

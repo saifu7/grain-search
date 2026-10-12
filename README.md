@@ -86,7 +86,7 @@ You can also check that a file was built by this repository's CI:
 See **[docs/development.md](docs/development.md)**. In short: install uv, Node 22 and Rust, then run:
 
 ```
-cd engine && uv sync --locked && uv run grain index
+cd engine && uv sync --locked && uv run grain folders add D:\Documents && uv run grain index
 cd ../app && npm ci && npm run tauri dev
 ```
 

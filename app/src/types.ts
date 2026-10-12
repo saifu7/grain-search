@@ -62,6 +62,9 @@ export interface Preview {
 
 export interface Status {
   device: string;
+  /** true when no folders are set up yet (nothing to index or search) */
+  setup_needed?: boolean;
+  folders?: string[];
   index: { files: number; text_vectors: number; image_vectors: number };
   indexer: null | {
     phase: string;
