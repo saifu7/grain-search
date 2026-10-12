@@ -20,7 +20,16 @@ index format; the app migrates or rebuilds automatically and the notes say so.
 - `grain folders [add|remove]`, `grain exclude [add|remove]` and `grain config` to manage what is
   indexed without editing files.
 
+- **Settings window** (⚙ in the search bar, or tray → Settings…): add and remove folders with the
+  Windows folder picker, add exclusions (a folder, or a pattern like `*.log`), see how many files
+  each folder has indexed, pause/resume and re-scan. Changes apply immediately, no restart; it
+  opens by itself on first run when no folders are set up.
+- Engine API for the Settings window: `GET /config`, `POST /config/folders`, `POST /config/excludes`.
+
 ### Changed
+- Removing a folder or adding an exclusion now removes those files from the index (before, only
+  files deleted from disk were removed), and hides them from results straight away.
+- The search service closes its database on shutdown (no locked index file afterwards).
 - Settings now live in `%APPDATA%\GrainSearch\config.json` and the index, logs and service file
   in `%LOCALAPPDATA%\GrainSearch\` (XDG folders on Linux/macOS; `GRAIN_SEARCH_HOME` overrides),
   instead of inside the source folder. The index folder can be moved with `index_dir`.

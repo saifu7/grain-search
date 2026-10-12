@@ -32,7 +32,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from . import __version__, previews, ranking, winstate
-from .config import Config
+from .config import DEFAULT_EXCLUDES, Config, change_excludes, change_folders, read_raw, save_raw
 from .embedder import Embedder, free_gpu_memory, is_out_of_memory
 from .indexer import IndexState, Stopped, index_paths, run_index
 from .search import Results, Searcher
@@ -99,6 +99,7 @@ class BackgroundIndexer:
         self.observer = None
         self._auto_reason = ""
         self._auto_checked = 0.0
+        self._watch_lock = threading.Lock()
         self.last_report: dict | None = None
 
     # control
@@ -123,6 +124,21 @@ class BackgroundIndexer:
 
     def rescan(self):
         self.rescan_flag.set()
+
+    def reconfigure(self):
+        """Folders or exclusions changed: watch the new folder list and run a pass now
+        (new folders get scanned, removed/excluded files leave the index)."""
+        with self._watch_lock:
+            old, self.observer = self.observer, None
+            if old is not None:
+                try:
+                    old.stop()
+                    old.join(timeout=3)
+                except Exception:
+                    pass
+            if not self.stop_flag.is_set():
+                self._start_watcher()
+        self.rescan()
 
     # pause logic, called between files
     def _pause_reason(self) -> str:
@@ -216,7 +232,8 @@ class BackgroundIndexer:
         winstate.lower_current_thread_priority()
         store = Store(self.cfg.db_path)
         try:
-            self._start_watcher()
+            with self._watch_lock:
+                self._start_watcher()
             if self.initial_scan:
                 self._full_pass(store)
             while not self.stop_flag.is_set():
@@ -320,6 +337,7 @@ class SearchService:
         self.started = time.time()
         self.indexer = BackgroundIndexer(cfg, self.embedder, watch, initial_scan) if background else None
         self.thumb_dir = cfg.data_dir / "thumbs"
+        self._config_lock = threading.Lock()
         self.request_exit = lambda: None  # set by serve(): asks the web server to stop
         self.app = self._build_app()
 
@@ -337,12 +355,59 @@ class SearchService:
                 self.store.save_vector_cache()
             except Exception:
                 pass
+            try:
+                self.store.close()  # release the file (Windows keeps open files locked)
+            except Exception:
+                pass
 
     # helpers
     def _authorised(self, request: Request) -> bool:
         h = request.headers.get("authorization", "")
         tok = h[7:] if h.lower().startswith("bearer ") else request.query_params.get("token", "")
         return secrets.compare_digest(tok, self.token)
+
+    # settings (folders + exclusions), changed live from the app's Settings window
+    def _config_view(self) -> dict:
+        cfg = self.cfg
+        with self.db_lock:
+            counts = {r: self.store.count_under(r) for r in cfg.roots}
+        builtin = {p.lower() for p in DEFAULT_EXCLUDES}
+        return {
+            "config_file": str(cfg.config_path) if cfg.config_path else None,
+            "index_dir": str(cfg.data_dir),
+            "setup_needed": not cfg.roots,
+            "folders": [
+                {
+                    "path": r,
+                    "exists": os.path.isdir(r),
+                    "indexed": counts[r].get("indexed", 0),
+                    "pending": counts[r].get("pending", 0),
+                    "errors": counts[r].get("error", 0),
+                    "total": sum(counts[r].values()),
+                }
+                for r in cfg.roots
+            ],
+            "excludes": [{"pattern": p, "builtin": p.lower() in builtin} for p in cfg.excludes],
+        }
+
+    def _change_config(self, what: str, action: str, value: str) -> dict:
+        """Apply one change, save config.json, update the live settings, re-scan."""
+        if self.cfg.config_path is None:
+            raise ValueError("This service was started without a settings file")
+        with self._config_lock:
+            raw = read_raw(self.cfg.config_path)
+            change = change_folders if what == "folders" else change_excludes
+            changed, message, value = change(raw, action, value)
+            if changed:
+                save_raw(self.cfg.config_path, raw)
+                # swap in new lists (never mutate: the indexer/searcher may be reading the old ones)
+                if what == "folders":
+                    self.cfg.roots = list(raw["roots"])
+                else:
+                    self.cfg.excludes = list(raw["excludes"])
+        if changed and self.indexer:
+            self.indexer.reconfigure()
+        return {"ok": True, "changed": changed, "message": message, "value": value, **self._config_view()}
 
     def _row(self, path: str | None) -> FileRow | None:
         """Only files that are in the index can be previewed/opened - never arbitrary paths."""
@@ -511,6 +576,21 @@ class SearchService:
             svc.request_exit()
             return JSONResponse({"ok": True})
 
+        async def config_get(request: Request):
+            return JSONResponse(await run_in_threadpool(svc._config_view))
+
+        def _config_change(what: str):
+            async def handler(request: Request):
+                body = await _json(request)
+                action = str(body.get("action", ""))
+                value = str(body.get("path") or body.get("value") or "")
+                try:
+                    return JSONResponse(await run_in_threadpool(svc._change_config, what, action, value))
+                except ValueError as e:
+                    return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+            return handler
+
         routes = [
             Route("/shutdown", shutdown, methods=["POST"]),
             Route("/health", health),
@@ -524,6 +604,9 @@ class SearchService:
             Route("/index/pause", _control("pause"), methods=["POST"]),
             Route("/index/resume", _control("resume"), methods=["POST"]),
             Route("/index/rescan", _control("rescan"), methods=["POST"]),
+            Route("/config", config_get),
+            Route("/config/folders", _config_change("folders"), methods=["POST"]),
+            Route("/config/excludes", _config_change("excludes"), methods=["POST"]),
         ]
 
         class Auth:

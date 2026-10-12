@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as api from "./api";
-import { copyText, ensureService, getSettings, hideWindow, inTauri, onShown, setWindowHeight } from "./platform";
+import { copyText, ensureService, getSettings, hideWindow, inTauri, onShown, openSettings, setWindowHeight } from "./platform";
 import type { DocHit, Item, Preview, SearchPayload, Section, ServiceInfo, Status, UiSettings } from "./types";
 
 // layout (logical px) — keep in sync with styles.css
@@ -27,6 +27,7 @@ export default function App() {
   const input = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const lastActive = useRef(Date.now());
+  const openedSetup = useRef(false);
 
   const svc = boot.state === "ready" ? boot.svc : null;
 
@@ -126,7 +127,19 @@ export default function App() {
   useEffect(() => {
     if (!svc) return;
     let alive = true;
-    const tick = () => api.status(svc).then((s) => alive && setStatus(s)).catch(() => {});
+    const tick = () =>
+      api
+        .status(svc)
+        .then((s) => {
+          if (!alive) return;
+          setStatus(s);
+          // first run: nothing to search yet, so open Settings once to add folders
+          if (s.setup_needed && !openedSetup.current) {
+            openedSetup.current = true;
+            openSettings();
+          }
+        })
+        .catch(() => {});
     tick();
     const t = setInterval(tick, 4000);
     return () => {
@@ -201,6 +214,9 @@ export default function App() {
             onKeyDown={onKeyDown}
           />
           {searching && <span className="spinner" aria-label="searching" />}
+          <button className="gear" title="Settings: folders and exclusions" aria-label="Settings" onClick={openSettings}>
+            <GearIcon />
+          </button>
         </div>
 
         {hasBody && (
@@ -427,7 +443,7 @@ function Footer({ status, toast, settings }: { status: Status | null; toast: str
     else if (ix?.phase === "indexing") left = `Indexing ${ix.done.toLocaleString()} / ${ix.total.toLocaleString()} · ${files} files · ${dev}`;
     else if (ix?.phase === "scanning" || ix?.phase === "loading") left = `Checking for changes… · ${files} files`;
     else left = `${files} files indexed · ${dev}`;
-    if (status.setup_needed) left = "No folders yet. Add one with:  grain folders add <folder>";
+    if (status.setup_needed) left = "No folders yet: open Settings (⚙) to add the folders you want to search";
   }
   if (settings.hotkey_error) left = `Hotkey ${settings.hotkey} unavailable: ${settings.hotkey_error}`;
   return (
@@ -492,4 +508,15 @@ function formatSize(n: number) {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 ** 3) return `${(n / 1024 / 1024).toFixed(1)} MB`;
   return `${(n / 1024 ** 3).toFixed(2)} GB`;
+}
+
+function GearIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M19.14 12.94a7.07 7.07 0 0 0 .05-.94 7.07 7.07 0 0 0-.05-.94l2.03-1.58a.48.48 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96a7 7 0 0 0-1.62-.94l-.36-2.54A.48.48 0 0 0 13.92 2h-3.84a.48.48 0 0 0-.47.41l-.36 2.54a7.3 7.3 0 0 0-1.62.94l-2.39-.96a.48.48 0 0 0-.59.22L2.73 8.47a.47.47 0 0 0 .12.61l2.03 1.58a7.3 7.3 0 0 0 0 1.88l-2.03 1.58a.48.48 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.04.7 1.62.94l.36 2.54c.05.24.25.41.47.41h3.84c.24 0 .44-.17.47-.41l.36-2.54a7 7 0 0 0 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.48.48 0 0 0-.12-.61zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"
+      />
+    </svg>
+  );
 }

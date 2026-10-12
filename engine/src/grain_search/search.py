@@ -27,6 +27,7 @@ from datetime import datetime
 import numpy as np
 
 from .config import Config
+from .crawler import excluder_for, is_under
 from .embedder import Embedder
 from .store import FileRow, Store
 
@@ -148,7 +149,15 @@ class Searcher:
         self.cfg, self.store, self.embedder = cfg, store, embedder
 
     # -- filters ----------------------------------------------------------------
+    def _excluded(self, path: str) -> bool:
+        key = (tuple(self.cfg.roots), tuple(self.cfg.excludes), str(self.cfg.data_dir))
+        if getattr(self, "_ex_key", None) != key:  # settings changed: rebuild once
+            self._ex_key, self._ex = key, excluder_for(self.cfg)
+        return self._ex(path)
+
     def _ok(self, f: FileRow, q: Query) -> bool:
+        if not is_under(f.path, self.cfg.roots) or self._excluded(f.path):
+            return False  # folder removed / newly excluded in Settings: hide at once
         if q.exts and f.ext not in q.exts:
             return False
         if q.within:

@@ -163,6 +163,15 @@ class Store:
         rows = self.db.execute("SELECT * FROM files WHERE path LIKE ? ESCAPE '\\'", (like,))
         return {r["path"]: FileRow.from_row(r) for r in rows}
 
+    def count_under(self, folder: str) -> dict[str, int]:
+        """How many files under `folder` are in the index, by status (indexed, pending, error...)."""
+        prefix = folder.rstrip("\\/") + os.sep
+        like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        rows = self.db.execute(
+            "SELECT status, COUNT(*) FROM files WHERE path LIKE ? ESCAPE '\\' GROUP BY status", (like,)
+        )
+        return {s: n for s, n in rows}
+
     def get_files(self, ids) -> dict[int, FileRow]:
         ids = list(set(ids))
         out: dict[int, FileRow] = {}

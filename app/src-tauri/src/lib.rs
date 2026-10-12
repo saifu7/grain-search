@@ -13,14 +13,17 @@ use serde::{Deserialize, Serialize};
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{
-    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, WebviewWindow, WindowEvent,
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 const WIDTH_ROUNDED: f64 = 756.0; // 720 panel + 2 x 18 px transparent margin for the shadow
 const WIDTH_GLASS: f64 = 720.0;
 const SERVICE_START_TIMEOUT: Duration = Duration::from_secs(180);
+const SETTINGS: &str = "settings"; // label of the Settings window
 
 // -- app folders -------------------------------------------------------------------------
 /// Where Grain Search keeps its files. Must match the engine's `paths.py` exactly:
@@ -373,6 +376,61 @@ fn set_height(app: AppHandle, window: WebviewWindow, height: f64) -> Result<(), 
         .map_err(|e| e.to_string())
 }
 
+/// Opens the Settings window (folders, exclusions, indexing), or brings it to the front.
+/// Must be `async`: creating a window from a synchronous command deadlocks on Windows
+/// (the WebView2 setup waits for the thread the command is blocking).
+#[tauri::command]
+async fn open_settings(app: AppHandle) -> Result<(), String> {
+    show_settings(&app).map_err(|e| e.to_string())
+}
+
+fn focus_settings(w: &WebviewWindow) -> tauri::Result<()> {
+    let _ = w.unminimize();
+    w.show()?;
+    w.set_focus()
+}
+
+fn show_settings(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.hide();
+    }
+    if let Some(w) = app.get_webview_window(SETTINGS) {
+        return focus_settings(&w);
+    }
+    // Same page as the search bar; a startup script tells it to show Settings
+    // (no "#settings" in the URL: some setups treat it as part of the file name).
+    let built = WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App("index.html".into()))
+        .title("Grain Search Settings")
+        .initialization_script("window.__GRAIN_VIEW__ = 'settings';")
+        .inner_size(760.0, 640.0)
+        .min_inner_size(560.0, 460.0)
+        .center()
+        .build();
+    match built {
+        Ok(_) => Ok(()),
+        // two clicks at once: the other one created it - just bring it forward
+        Err(e) => match app.get_webview_window(SETTINGS) {
+            Some(w) => focus_settings(&w),
+            None => Err(e),
+        },
+    }
+}
+
+/// The standard Windows folder picker. Returns the chosen folder, or None if cancelled.
+#[tauri::command]
+async fn pick_folder(app: AppHandle, title: Option<String>) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title(title.unwrap_or_else(|| "Choose a folder".into()))
+            .blocking_pick_folder()
+            .and_then(|p| p.into_path().ok())
+            .map(|p| p.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn get_settings(state: tauri::State<'_, AppState>) -> UiSettings {
     UiSettings {
@@ -392,6 +450,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         true,
         None::<&str>,
     )?;
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let pause = MenuItem::with_id(app, "pause", "Pause indexing", true, None::<&str>)?;
     let resume = MenuItem::with_id(app, "resume", "Resume indexing", true, None::<&str>)?;
     let rescan = MenuItem::with_id(app, "rescan", "Re-scan all folders", true, None::<&str>)?;
@@ -411,7 +470,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &open, &s1, &pause, &resume, &rescan, &s2, &autostart, &s3, &quit,
+            &open, &settings, &s1, &pause, &resume, &rescan, &s2, &autostart, &s3, &quit,
         ],
     )?;
 
@@ -421,6 +480,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => show(app),
+            "settings" => {
+                let _ = show_settings(app);
+            }
             "pause" => service_post(app, "/index/pause"),
             "resume" => service_post(app, "/index/resume"),
             "rescan" => service_post(app, "/index/rescan"),
@@ -463,6 +525,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show(app)
         }))
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             Some(vec!["--hidden"]),
@@ -508,21 +571,28 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| match event {
-            // click anywhere else -> hide, like Spotlight
-            WindowEvent::Focused(false) => {
-                let _ = window.hide();
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return; // the Settings window behaves like a normal window
             }
-            WindowEvent::CloseRequested { api, .. } => {
-                api.prevent_close();
-                let _ = window.hide();
+            match event {
+                // click anywhere else -> hide the search bar, like Spotlight
+                WindowEvent::Focused(false) => {
+                    let _ = window.hide();
+                }
+                WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                _ => {}
             }
-            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             ensure_service,
             get_settings,
             hide_window,
+            open_settings,
+            pick_folder,
             set_height
         ])
         .run(tauri::generate_context!())

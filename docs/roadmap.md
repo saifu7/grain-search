@@ -31,6 +31,8 @@ checksums and build attestations, Dependabot, CodeQL.
   Search strictness · AI & performance · Shortcut & look · Index (errors with Retry, move to
   another drive) · About.
 - Changes apply live. Removing a folder removes its files from the index at once.
+- ✅ Done early: the Settings window with folders, exclusions, indexing status, pause/resume and
+  re-scan, applied live, and opened automatically on first run.
 
 ### Phase 3: Smooth search window
 Rows that don't jump (stable merge of fast and full results), selection follows the file, preview

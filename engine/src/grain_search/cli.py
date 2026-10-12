@@ -12,7 +12,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
-from .config import DEFAULT_EXCLUDES, Config, expand, load_config, read_raw, save_raw
+from .config import DEFAULT_EXCLUDES, Config, change_excludes, change_folders, load_config, read_raw, save_raw
 
 
 # -- console helpers ------------------------------------------------------------
@@ -308,12 +308,8 @@ def _no_folders_hint(cfg: Config):
     print(dim(f"Settings file: {cfg.config_path}"))
 
 
-def _same_path(a: str, b: str) -> bool:
-    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
-
-
 def _restart_note():
-    print(dim("If Grain Search is running, restart it (tray -> Quit, then start it again) to apply this."))
+    print(dim("If Grain Search is running, use its Settings window instead, or restart it to apply this."))
 
 
 def _settings_file(cfg: Config):
@@ -335,88 +331,44 @@ def cmd_config(args, cfg: Config) -> int:
     return 0
 
 
+def _change(args, cfg: Config, items: list[str], change, what: str) -> int:
+    if not items:
+        print(yellow(f"Which {what}? e.g.  grain {args.cmd} {args.action} D:\\Documents"))
+        return 1
+    path_file = _settings_file(cfg)
+    raw = read_raw(path_file)
+    changed_any = False
+    for given in items:
+        try:
+            changed, msg, _ = change(raw, args.action, given)
+        except ValueError as e:
+            print(yellow(str(e)))
+            return 1
+        print(green(msg) if changed else dim(msg))
+        changed_any |= changed
+    if changed_any:
+        save_raw(path_file, raw)
+        _restart_note()
+    return 0
+
+
 def cmd_folders(args, cfg: Config) -> int:
-    action = args.action or "list"
-    if action == "list":
+    if (args.action or "list") == "list":
         if not cfg.roots:
             _no_folders_hint(cfg)
             return 0
         for r in cfg.roots:
             print(r + ("" if os.path.isdir(r) else dim("  (not found)")))
         return 0
-    if not args.paths:
-        print(yellow(f"Which folder? e.g.  grain folders {action} D:\\Documents"))
-        return 1
-    path_file = _settings_file(cfg)
-    raw = read_raw(path_file)
-    roots: list[str] = list(raw.get("roots") or [])
-    changed = False
-    for given in args.paths:
-        path = os.path.abspath(expand(given))
-        if action == "add":
-            if not os.path.isdir(path):
-                print(yellow(f"Not a folder: {path}"))
-                return 1
-            if any(_same_path(expand(r), path) for r in roots):
-                print(dim(f"Already indexed: {path}"))
-                continue
-            roots.append(path)
-            print(green("Added ") + path)
-        else:
-            keep = [r for r in roots if not _same_path(expand(r), path)]
-            if len(keep) == len(roots):
-                print(yellow(f"Not in the list: {path}"))
-                continue
-            roots = keep
-            print(green("Removed ") + path + dim("  (its files leave the index on the next scan)"))
-        changed = True
-    if changed:
-        raw["roots"] = roots
-        save_raw(path_file, raw)
-        _restart_note()
-    return 0
-
-
-def _as_exclude_pattern(given: str) -> str:
-    if "*" in given or "?" in given:
-        return given  # already a pattern, e.g. *\\node_modules\\*  or  *.log
-    return os.path.abspath(expand(given)).rstrip("\\/") + os.sep + "*"  # a folder and everything in it
+    return _change(args, cfg, args.paths, change_folders, "folder")
 
 
 def cmd_exclude(args, cfg: Config) -> int:
-    action = args.action or "list"
-    path_file = _settings_file(cfg)
-    raw = read_raw(path_file)
-    pats: list[str] = list(raw.get("excludes") or DEFAULT_EXCLUDES)
-    if action == "list":
-        for p in pats:
+    if (args.action or "list") == "list":
+        for p in read_raw(_settings_file(cfg)).get("excludes") or DEFAULT_EXCLUDES:
             print(p)
         return 0
-    if not args.items:
-        print(yellow(f"Which folder or pattern? e.g.  grain exclude {action} D:\\Documents\\old  or  *.log"))
-        return 1
-    changed = False
-    for given in args.items:
-        pat = _as_exclude_pattern(given)
-        if action == "add":
-            if any(_same_path(p, pat) for p in pats):
-                print(dim(f"Already excluded: {pat}"))
-                continue
-            pats.append(pat)
-            print(green("Excluded ") + pat)
-        else:
-            keep = [p for p in pats if not _same_path(p, pat)]
-            if len(keep) == len(pats):
-                print(yellow(f"Not in the list: {pat}"))
-                continue
-            pats = keep
-            print(green("No longer excluded ") + pat)
-        changed = True
-    if changed:
-        raw["excludes"] = pats
-        save_raw(path_file, raw)
-        _restart_note()
-    return 0
+    return _change(args, cfg, args.items, change_excludes, "folder or pattern")
 
 
 def main(argv: list[str] | None = None) -> int:

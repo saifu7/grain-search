@@ -35,8 +35,13 @@ npm run tauri build
 
 `=text` only files that contain the text · `~idea` only by meaning · `type:img`, `ext:pdf`, `in:D:\work`, `after:2025-01-01`
 
-Tray icon: Open · Pause / Resume indexing · Re-scan · Start with Windows · Quit (also stops the
-service if the bar started it).
+Tray icon: Open · Settings… · Pause / Resume indexing · Re-scan · Start with Windows · Quit (also
+stops the service if the bar started it).
+
+**Settings window** (⚙ in the search bar, or tray → Settings…): add/remove folders with the folder
+picker or by pasting a path, add exclusions (a folder or a pattern like `*.log`), see per-folder
+counts, pause/resume, re-scan. Changes apply immediately. In a browser (UI development) the page
+is at `#settings`, with a text box instead of the folder picker.
 
 ## Settings (optional)
 

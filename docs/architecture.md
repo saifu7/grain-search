@@ -78,7 +78,8 @@ engine/src/grain_search/
 └─ winstate.py       Windows: on battery? full-screen app? lower thread priority
 
 app/
-├─ src/              React UI: App.tsx (window), api.ts (SSE client), platform.ts (Tauri vs browser)
+├─ src/              React UI: App.tsx (search bar), Settings.tsx (Settings window), api.ts (HTTP/SSE
+│                    client), platform.ts (Tauri vs browser)
 └─ src-tauri/src/lib.rs   hotkey, window placement, tray, autostart, start/stop the engine
 ```
 
@@ -309,7 +310,7 @@ Report vulnerabilities privately: [SECURITY.md](../SECURITY.md).
 | What | Now | Planned (installed app) |
 |---|---|---|
 | App binary | `app/src-tauri/target/…` (development build) | `%LOCALAPPDATA%\Programs\Grain Search\` (Phase 4) |
-| Search settings (folders, exclusions…) | `%APPDATA%\GrainSearch\config.json` | same, edited in the Settings window |
+| Search settings (folders, exclusions…) | `%APPDATA%\GrainSearch\config.json`, edited live in the Settings window | same |
 | Window settings (hotkey, look) | `%APPDATA%\GrainSearch\settings.json` | merged into config.json (Settings window) |
 | Index, vectors, thumbnails | `%LOCALAPPDATA%\GrainSearch\index\` (`index_dir` in config.json moves it) | same, "Move index" button |
 | Logs | `%LOCALAPPDATA%\GrainSearch\logs\service.log` | same, rotated |
