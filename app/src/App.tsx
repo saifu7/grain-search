@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as api from "./api";
 import { copyText, ensureService, getSettings, hideWindow, inTauri, onShown, setWindowHeight } from "./platform";
-import type { DocHit, ImageHit, Item, Preview, SearchPayload, Section, ServiceInfo, Status, UiSettings } from "./types";
+import type { DocHit, Item, Preview, SearchPayload, Section, ServiceInfo, Status, UiSettings } from "./types";
 
 // layout (logical px) — keep in sync with styles.css
 const BAR = 64;
