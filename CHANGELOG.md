@@ -25,6 +25,8 @@ index format; the app migrates or rebuilds automatically and the notes say so.
   each folder has indexed, pause/resume and re-scan. Changes apply immediately, no restart; it
   opens by itself on first run when no folders are set up.
 - Engine API for the Settings window: `GET /config`, `POST /config/folders`, `POST /config/excludes`.
+- New Grain Search logo: a lowercase "g" with a golden grain in its bowl. App, tray and installer
+  icons are generated from `docs/assets/logo.svg`.
 
 ### Changed
 - Removing a folder or adding an exclusion now removes those files from the index (before, only
