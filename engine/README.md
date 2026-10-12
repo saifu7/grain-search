@@ -86,6 +86,8 @@ curl.exe -H "Authorization: Bearer $($s.token)" "$($s.url)/status"
 | `GET /page?path=&page=&width=` | PNG of a PDF page |
 | `POST /open {path, mode: open/reveal, query}` | opens the file; files you open rise in future results |
 | `GET /status` · `POST /index/pause` · `/index/resume` · `/index/rescan` | indexing control |
+| `GET /config` | folders (with indexed/pending/error counts per folder) and exclusions |
+| `POST /config/folders {action: add/remove, path}` · `POST /config/excludes {action, value}` | change them: saved to config.json and applied live (new folders indexed, removed/excluded files dropped) |
 
 Only files that are in the index can be previewed or opened.
 

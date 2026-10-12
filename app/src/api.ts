@@ -1,5 +1,5 @@
 // Talks to `grain serve` (127.0.0.1 only, bearer token).
-import type { Preview, SearchPayload, ServiceInfo, Status } from "./types";
+import type { ConfigChange, ConfigView, Preview, SearchPayload, ServiceInfo, Status } from "./types";
 
 const enc = encodeURIComponent;
 
@@ -49,7 +49,16 @@ async function call<T>(svc: ServiceInfo, path: string, init?: RequestInit): Prom
     ...init,
     headers: { Authorization: `Bearer ${svc.token}`, "Content-Type": "application/json", ...(init?.headers ?? {}) },
   });
-  if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 200)}`);
+  if (!r.ok) {
+    const text = await r.text();
+    let msg = text.slice(0, 200);
+    try {
+      msg = JSON.parse(text).error ?? msg; // the service explains what was wrong
+    } catch {
+      /* not JSON */
+    }
+    throw new Error(msg || `HTTP ${r.status}`);
+  }
   return r.json() as Promise<T>;
 }
 
@@ -75,3 +84,15 @@ export const thumbUrl = (svc: ServiceInfo, path: string, size: number) =>
 
 export const pageUrl = (svc: ServiceInfo, path: string, page: number, width: number) =>
   `${svc.url}/page?path=${enc(path)}&page=${page}&width=${width}&token=${enc(svc.token)}`;
+
+// -- settings: folders and exclusions (applied live by the service) ---------------------
+export const getConfig = (svc: ServiceInfo) => call<ConfigView>(svc, "/config");
+
+export const changeFolder = (svc: ServiceInfo, action: "add" | "remove", path: string) =>
+  call<ConfigChange>(svc, "/config/folders", { method: "POST", body: JSON.stringify({ action, path }) });
+
+export const changeExclude = (svc: ServiceInfo, action: "add" | "remove", value: string) =>
+  call<ConfigChange>(svc, "/config/excludes", { method: "POST", body: JSON.stringify({ action, value }) });
+
+export const indexControl = (svc: ServiceInfo, action: "pause" | "resume" | "rescan") =>
+  call<{ ok: boolean }>(svc, `/index/${action}`, { method: "POST" });

@@ -82,3 +82,20 @@ export type Item =
   | { kind: "image"; section: Section; hit: ImageHit };
 
 export type Section = "top" | "docs" | "related" | "images";
+
+/** GET /config: what is indexed and what is skipped. */
+export interface ConfigView {
+  config_file: string | null;
+  index_dir: string;
+  setup_needed: boolean;
+  folders: { path: string; exists: boolean; indexed: number; pending: number; errors: number; total: number }[];
+  excludes: { pattern: string; builtin: boolean }[];
+}
+
+/** Reply to a folder/exclusion change: the result plus the new settings. */
+export interface ConfigChange extends ConfigView {
+  ok: boolean;
+  changed: boolean;
+  message: string;
+  value: string;
+}

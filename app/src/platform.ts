@@ -21,7 +21,7 @@ export async function ensureService(): Promise<ServiceInfo> {
   if (t) return t.core.invoke<ServiceInfo>("ensure_service");
   const p = new URLSearchParams(location.search);
   const url = p.get("url"), token = p.get("token");
-  if (!url || !token) throw new Error("Open with ?url=http://127.0.0.1:8766&token=… (see engine/data/service.json)");
+  if (!url || !token) throw new Error("Open with ?url=http://127.0.0.1:8766&token=… (see service.json in %LOCALAPPDATA%\\GrainSearch)");
   return { url, token };
 }
 
@@ -51,4 +51,21 @@ export function onShown(cb: () => void): () => void {
 
 export async function copyText(text: string): Promise<void> {
   await navigator.clipboard.writeText(text);
+}
+
+/** Opens the Settings window (in a browser: the settings page in this tab). */
+export function openSettings(): void {
+  const t = tauri();
+  if (t) {
+    t.core.invoke("open_settings").catch(() => {});
+    return;
+  }
+  location.hash = "#settings";
+}
+
+/** The native folder picker. Resolves to null when cancelled, or when there is no picker (browser). */
+export async function pickFolder(title?: string): Promise<string | null> {
+  const t = tauri();
+  if (!t) return null;
+  return t.core.invoke<string | null>("pick_folder", { title });
 }

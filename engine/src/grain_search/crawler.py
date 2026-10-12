@@ -65,6 +65,16 @@ class Excluder:
         )
 
 
+def is_under(path: str, roots: list[str]) -> bool:
+    """True if `path` is one of `roots` or inside one (case-insensitive on Windows)."""
+    p = os.path.normcase(os.path.abspath(path))
+    for r in roots:
+        r = os.path.normcase(os.path.abspath(r))
+        if p == r or p.startswith(r.rstrip("\\/") + os.sep):
+            return True
+    return False
+
+
 def excluder_for(cfg: Config) -> Excluder:
     return Excluder(cfg.excludes, roots=cfg.roots, always=cfg.own_excludes)
 

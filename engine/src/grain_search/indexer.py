@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 
 from .chunker import chunk_segments
 from .config import Config
-from .crawler import Excluder, FileInfo, crawl, excluder_for, quick_hash
+from .crawler import Excluder, FileInfo, crawl, excluder_for, is_under, quick_hash
 from .embedder import Embedder
 from .extractors import extract, kind_of
 from .extractors.image import TOO_SMALL
@@ -73,13 +73,7 @@ def _noop(*_a, **_k):
     return None
 
 
-def _is_under(path: str, roots: list[str]) -> bool:
-    p = os.path.normcase(os.path.abspath(path))
-    for r in roots:
-        r = os.path.normcase(os.path.abspath(r))
-        if p == r or p.startswith(r.rstrip("\\/") + os.sep):
-            return True
-    return False
+_is_under = is_under  # kept for older imports
 
 
 def _split(path: str) -> tuple[str, str]:
@@ -244,6 +238,17 @@ def run_index(
 
     # 2) moves/renames + deletions -------------------------------------------
     missing = {p: r for p, r in known.items() if p not in seen and _is_under(p, cfg.roots) and not os.path.exists(p)}
+    # files that still exist but are no longer covered: their folder was removed from the
+    # settings, or an exclusion now matches them -> drop them from the index too
+    excluded = excluder_for(cfg)
+    dropped = [
+        r
+        for p, r in known.items()
+        if p not in seen
+        and p not in missing
+        and (not kinds or r.kind in kinds)
+        and (not _is_under(p, cfg.roots) or excluded(p))
+    ]
     by_hash = {(r.qhash, r.size): r for r in missing.values() if r.qhash and r.status != "pending"}
     really_todo: list[tuple[FileInfo, str | None]] = []
     for fi in todo:
@@ -266,7 +271,7 @@ def run_index(
             rep.moved += 1
             continue
         really_todo.append((fi, qh))
-    for r in missing.values():
+    for r in [*missing.values(), *dropped]:
         store.delete_file(r.id)
         rep.removed += 1
     store.commit()

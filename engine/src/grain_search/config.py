@@ -192,3 +192,60 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     else:
         cfg.data_dir = paths.index_dir
     return cfg
+
+
+# -- changing folders and exclusions (used by the CLI and the app's Settings window) ---------
+def same_path(a: str, b: str) -> bool:
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def as_exclude_pattern(given: str) -> str:
+    """`*.log` stays a pattern; a folder path becomes `<folder>\\*` (the folder and everything in it)."""
+    given = given.strip()
+    if "*" in given or "?" in given:
+        return given
+    return os.path.abspath(expand(given)).rstrip("\\/") + os.sep + "*"
+
+
+def change_folders(raw: dict, action: str, given: str) -> tuple[bool, str, str]:
+    """Add or remove one folder in the raw settings dict, in place.
+    Returns (changed, message, normalised path). Raises ValueError for bad input."""
+    if action not in ("add", "remove"):
+        raise ValueError(f"unknown action {action!r}")
+    if not given or not given.strip():
+        raise ValueError("No folder given")
+    path = os.path.abspath(expand(given.strip()))
+    roots: list[str] = list(raw.get("roots") or [])
+    if action == "add":
+        if not os.path.isdir(path):
+            raise ValueError(f"Not a folder: {path}")
+        if any(same_path(expand(r), path) for r in roots):
+            return False, f"Already indexed: {path}", path
+        raw["roots"] = [*roots, path]
+        return True, f"Added {path}", path
+    keep = [r for r in roots if not same_path(expand(r), path)]
+    if len(keep) == len(roots):
+        return False, f"Not in the list: {path}", path
+    raw["roots"] = keep
+    return True, f"Removed {path}", path
+
+
+def change_excludes(raw: dict, action: str, given: str) -> tuple[bool, str, str]:
+    """Add or remove one exclusion (a folder or a pattern) in the raw settings dict, in place.
+    The first change copies the built-in list, so built-ins stay unless removed explicitly."""
+    if action not in ("add", "remove"):
+        raise ValueError(f"unknown action {action!r}")
+    if not given or not given.strip():
+        raise ValueError("No folder or pattern given")
+    pat = as_exclude_pattern(given)
+    pats: list[str] = list(raw.get("excludes") or DEFAULT_EXCLUDES)
+    if action == "add":
+        if any(same_path(p, pat) for p in pats):
+            return False, f"Already excluded: {pat}", pat
+        raw["excludes"] = [*pats, pat]
+        return True, f"Excluded {pat}", pat
+    keep = [p for p in pats if not same_path(p, pat)]
+    if len(keep) == len(pats):
+        return False, f"Not in the list: {pat}", pat
+    raw["excludes"] = keep
+    return True, f"No longer excluded: {pat}", pat
