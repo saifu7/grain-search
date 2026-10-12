@@ -377,9 +377,17 @@ fn set_height(app: AppHandle, window: WebviewWindow, height: f64) -> Result<(), 
 }
 
 /// Opens the Settings window (folders, exclusions, indexing), or brings it to the front.
+/// Must be `async`: creating a window from a synchronous command deadlocks on Windows
+/// (the WebView2 setup waits for the thread the command is blocking).
 #[tauri::command]
-fn open_settings(app: AppHandle) -> Result<(), String> {
+async fn open_settings(app: AppHandle) -> Result<(), String> {
     show_settings(&app).map_err(|e| e.to_string())
+}
+
+fn focus_settings(w: &WebviewWindow) -> tauri::Result<()> {
+    let _ = w.unminimize();
+    w.show()?;
+    w.set_focus()
 }
 
 fn show_settings(app: &AppHandle) -> tauri::Result<()> {
@@ -387,18 +395,25 @@ fn show_settings(app: &AppHandle) -> tauri::Result<()> {
         let _ = main.hide();
     }
     if let Some(w) = app.get_webview_window(SETTINGS) {
-        let _ = w.unminimize();
-        w.show()?;
-        w.set_focus()?;
-        return Ok(());
+        return focus_settings(&w);
     }
-    WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App("index.html#settings".into()))
+    // Same page as the search bar; a startup script tells it to show Settings
+    // (no "#settings" in the URL: some setups treat it as part of the file name).
+    let built = WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App("index.html".into()))
         .title("Grain Search Settings")
+        .initialization_script("window.__GRAIN_VIEW__ = 'settings';")
         .inner_size(760.0, 640.0)
         .min_inner_size(560.0, 460.0)
         .center()
-        .build()?;
-    Ok(())
+        .build();
+    match built {
+        Ok(_) => Ok(()),
+        // two clicks at once: the other one created it - just bring it forward
+        Err(e) => match app.get_webview_window(SETTINGS) {
+            Some(w) => focus_settings(&w),
+            None => Err(e),
+        },
+    }
 }
 
 /// The standard Windows folder picker. Returns the chosen folder, or None if cancelled.
