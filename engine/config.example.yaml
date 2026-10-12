@@ -1,0 +1,62 @@
+# Copy to config.yaml and edit. Without config.yaml, Documents, Desktop,
+# Downloads and Pictures in your user folder are indexed.
+
+roots:
+  - "%USERPROFILE%\\Documents"
+  - "%USERPROFILE%\\Desktop"
+  - "%USERPROFILE%\\Downloads"
+  - "%USERPROFILE%\\Pictures"
+  # - "D:\\work"            # any other folder or drive
+
+# Paths matching these are skipped (* = anything). Case-insensitive.
+excludes:
+  - "C:\\Windows\\*"
+  - "C:\\Program Files\\*"
+  - "C:\\Program Files (x86)\\*"
+  - "C:\\ProgramData\\*"
+  - "*\\AppData\\*"
+  - "*\\$Recycle.Bin\\*"
+  - "*\\System Volume Information\\*"
+  - "*\\node_modules\\*"
+  - "*\\.git\\*"
+  - "*\\.venv\\*"
+  - "*\\venv\\*"
+  - "*\\__pycache__\\*"
+  - "*\\site-packages\\*"
+  - "*\\grain-search\\engine\\data\\*"
+
+limits:
+  max_doc_mb: 50
+  max_image_mb: 40
+  skip_hidden: true
+
+model:
+  id: google/embeddinggemma-2
+  modalities: [text, image]   # [text] = documents only (smaller, faster)
+  dim: 768                    # 768 | 512 | 256 - changing it needs `grain reset` + re-index
+  vision_tokens: 280          # 70 | 140 | 280 | 560 | 1120 - lower = faster image indexing
+  device: auto                # auto | cuda | cpu
+  text_batch: 16              # lower (8) if you see 'GPU memory full'
+  image_batch: 8              # lower (4) if you see 'GPU memory full'
+  gpu_memory_fraction: 0.5    # max share of GPU memory the AI model may use (leaves room for games)
+
+chunking:
+  target_tokens: 350
+  overlap_tokens: 50
+
+search:
+  rrf_k: 60
+  text_top_k: 200
+  image_top_k: 50
+  image_min_score: 0.20       # hide weak picture matches; tune with scripts/eval_golden.py
+  text_min_score: 0.30        # hide weak "related by meaning" documents (raise to see fewer)
+  related_margin: 0.08        # when real text matches exist, only show related files this close to the best one
+  related_limit: 3            # ...and at most this many
+
+service:                      # `grain serve` - the background service for the Grain Search window
+  port: 8766                  # listens on 127.0.0.1 only
+  watch: true                 # re-index files as soon as they change
+  pause_on_fullscreen: true   # pause indexing while a game / full-screen app runs
+  pause_on_battery: true
+
+data_dir: ./data

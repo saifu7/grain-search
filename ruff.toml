@@ -1,0 +1,7 @@
+# Lint settings for scripts/ (engine/ has its own in engine/pyproject.toml).
+line-length = 120
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]

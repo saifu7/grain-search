@@ -1,0 +1,36 @@
+# Install once:  uv tool install pre-commit  &&  pre-commit install
+# Update hook versions:  pre-commit autoupdate
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-json
+        exclude: (tsconfig\.json)$
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-merge-conflict
+      - id: detect-private-key
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.8
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+        files: ^(engine|scripts)/
+      - id: ruff-format
+        files: ^(engine|scripts)/
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+  - repo: local
+    hooks:
+      - id: repo-hygiene
+        name: no personal data, versions in sync
+        entry: python scripts/check_repo.py
+        language: python   # pre-commit provides its own Python; no system Python needed
+        pass_filenames: false

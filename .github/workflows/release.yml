@@ -1,0 +1,102 @@
+name: Release
+
+# Push a tag like v0.2.0 or v0.2.0-beta.1 (see docs/releasing.md).
+# Builds the installer and engine wheel, and creates a DRAFT GitHub Release with them attached.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v0.2.0"
+        required: true
+
+permissions:
+  contents: write        # create the release
+  id-token: write        # build provenance
+  attestations: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Version in files matches the tag
+        run: python scripts/check_repo.py --tag "$TAG"
+
+      - name: Release notes from CHANGELOG.md
+        run: python scripts/release_notes.py "${TAG#v}" > release-notes.md
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Build engine wheel
+        working-directory: engine
+        run: uv build --wheel --out-dir ../dist-engine
+
+      - name: Build installer
+        working-directory: app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          npm ci
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "Updater signing key found: creating signed update files"
+            npx tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set: building without update files"
+            npx tauri build
+          fi
+
+      - name: Collect assets
+        run: |
+          VER="${TAG#v}"
+          mkdir -p release
+          NSIS=app/src-tauri/target/release/bundle/nsis
+          SETUP=$(ls "$NSIS"/*-setup.exe | head -n1)
+          cp "$SETUP" "release/GrainSearch-$VER-x64-setup.exe"
+          if [ -f "$SETUP.sig" ]; then
+            cp "$SETUP.sig" "release/GrainSearch-$VER-x64-setup.exe.sig"
+            python scripts/updater_manifest.py "$VER" "release/GrainSearch-$VER-x64-setup.exe.sig" \
+              "https://github.com/${{ github.repository }}/releases/download/$TAG/GrainSearch-$VER-x64-setup.exe" \
+              > release/latest.json
+          fi
+          cp dist-engine/*.whl release/
+          cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Build provenance attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release/*
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRE=""
+          case "$TAG" in *-*) PRE="--prerelease" ;; esac
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* --draft $PRE \
+              --title "Grain Search ${TAG#v}" --notes-file release-notes.md --verify-tag
+          fi

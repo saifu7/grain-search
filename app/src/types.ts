@@ -1,0 +1,81 @@
+export interface ServiceInfo {
+  url: string;
+  token: string;
+}
+
+export interface UiSettings {
+  glass: boolean; // Windows acrylic blur (square-ish corners) instead of macOS-style rounded bar
+  hotkey: string;
+  hotkey_error?: string | null;
+}
+
+export interface DocHit {
+  path: string;
+  name: string;
+  folder: string;
+  ext: string;
+  snippet: string;
+  page: number | null;
+  line: number | null;
+  match: "exact" | "words" | "name" | "meaning";
+  contains_text: boolean;
+  similarity: number | null;
+}
+
+export interface ImageHit {
+  path: string;
+  name: string;
+  folder: string;
+  score: number;
+  meta: Record<string, unknown>;
+}
+
+export interface SearchPayload {
+  stage: "fast" | "full";
+  query: string;
+  docs: DocHit[];
+  images: ImageHit[];
+  top: string | null;
+  ms: number;
+  skipped?: boolean;
+}
+
+export interface ExcerptLine {
+  n: number | null;
+  text: string;
+  highlights: [number, number][];
+  match: boolean;
+}
+
+export interface Preview {
+  path: string;
+  name: string;
+  folder: string;
+  ext: string;
+  kind: string;
+  size: number;
+  modified: string;
+  meta: Record<string, unknown>;
+  excerpt: { lines: ExcerptLine[]; page: number | null } | null;
+  error?: string;
+}
+
+export interface Status {
+  device: string;
+  index: { files: number; text_vectors: number; image_vectors: number };
+  indexer: null | {
+    phase: string;
+    done: number;
+    total: number;
+    paused_reason: string;
+    manual_pause: boolean;
+    last_error: string;
+  };
+}
+
+/** One selectable row in the result list. */
+export type Item =
+  | { kind: "doc"; section: Section; hit: DocHit }
+  | { kind: "image"; section: Section; hit: ImageHit };
+
+export type Section = "top" | "docs" | "related" | "images";

@@ -1,0 +1,50 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! **Please don't paste personal file names, paths or document text.**
+        Replace them with placeholders like `C:\Users\<me>\Documents\<file>.pdf`.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Press Alt+Space
+        2. Type ...
+        3. ...
+  - type: input
+    id: version
+    attributes:
+      label: Grain Search version
+      description: Tray → About, or the release you downloaded.
+      placeholder: "0.2.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: windows
+    attributes:
+      label: Windows version
+      options: ["Windows 11", "Windows 10", "Other"]
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU
+      placeholder: "NVIDIA RTX 3060 6 GB / Intel UHD / none"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log excerpt
+      description: The relevant lines from `service.log` (tray → Open logs). Remove personal paths first.
+      render: text

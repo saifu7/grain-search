@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hygiene:
+    name: Repository hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: No personal data, versions in sync
+        run: python3 scripts/check_repo.py
+      - uses: astral-sh/setup-uv@v6
+      - name: Lint repository scripts
+        run: |
+          uvx ruff check scripts
+          uvx ruff format --check scripts
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  engine:
+    name: Engine (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Lock file is up to date
+        if: runner.os == 'Linux'
+        run: uv lock --locked
+      - name: Lint
+        if: runner.os == 'Linux'
+        run: |
+          uvx ruff check .
+          uvx ruff format --check .
+      - name: Install (CPU PyTorch; the tests use a fake embedder)
+        run: |
+          uv venv
+          uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          uv pip install --no-sources -e . pytest reportlab   # = the dev group in pyproject.toml
+      - name: Test
+        run: uv run --no-sync python -m pytest -m "not model" -q
+
+  ui:
+    name: UI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+
+  app-windows:
+    name: Windows app (Rust shell + installer)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - run: npm ci
+      - run: npm run build
+      - name: rustfmt
+        working-directory: app/src-tauri
+        run: cargo fmt --check
+      - name: clippy
+        working-directory: app/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Rust tests
+        working-directory: app/src-tauri
+        run: cargo test
+      - name: Build installer (debug)
+        run: npx tauri build --debug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-debug-${{ github.sha }}
+          path: app/src-tauri/target/debug/bundle/nsis/*.exe
+          retention-days: 7

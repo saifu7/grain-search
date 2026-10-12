@@ -1,0 +1,9 @@
+# Copy to tests/golden_queries.yaml and fill in 30-60 real queries you would type.
+# `expect` = a path (or just the end of it) that should come back near the top.
+# kind: doc | img
+- query: "the invoice was paid late because of the bank holiday"
+  expect: "Documents\\letters\\sam.txt"
+  kind: doc
+- query: "my dog sleeping on a red sofa"
+  expect: "Pictures\\2024\\IMG_2231.jpg"
+  kind: img

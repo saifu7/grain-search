@@ -1,0 +1,66 @@
+# ── Personal data: never commit ─────────────────────────────────────────────
+# The index holds text extracted from your own files.
+data/
+data-fake/
+**/data/
+*.db
+*.db-wal
+*.db-shm
+*.npz
+service.json
+config.yaml
+!**/*.example.yaml
+settings.json
+!**/settings.example.json
+engine/tests/golden_queries.yaml
+.env
+.env.*
+
+# ── Secrets ─────────────────────────────────────────────────────────────────
+*.key
+*.pem
+*.pfx
+*.p12
+.tauri/
+
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+*.egg-info/
+uv.lock.bak
+
+# ── Node / frontend ─────────────────────────────────────────────────────────
+node_modules/
+app/dist/
+playwright-report/
+test-results/
+
+# ── Rust / Tauri ────────────────────────────────────────────────────────────
+target/
+app/src-tauri/gen/
+app/src-tauri/resources/uv*.exe
+
+# ── Models & large files ────────────────────────────────────────────────────
+*.safetensors
+*.bin
+*.onnx
+*.gguf
+models/
+es_*.tgz
+*.tgz
+
+# ── OS / editors ────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
