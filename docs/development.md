@@ -22,12 +22,15 @@ setx RUSTUP_HOME D:\cache\rustup
 ```
 cd engine
 uv sync --locked                          # installs everything, incl. the CUDA build of PyTorch
-copy config.example.yaml config.yaml      # choose your folders (this file is git-ignored)
+uv run grain folders add D:\some\test\folder   # nothing is indexed until you add folders
 uv run grain index                        # first run downloads EmbeddingGemma 2 (~1.5 GB)
 uv run grain search "dog on a red sofa"
 ```
 Check that the GPU is used: `uv run python -c "import torch; print(torch.cuda.is_available())"`.
-The index lives in `engine\data\` (git-ignored). Details: [engine/README.md](../engine/README.md).
+Settings go to `%APPDATA%\GrainSearch\config.json`, the index, logs and `service.json` to
+`%LOCALAPPDATA%\GrainSearch\` (`uv run grain config` shows the paths). To keep a separate
+development profile, set `GRAIN_SEARCH_HOME` to any folder first, e.g.
+`set GRAIN_SEARCH_HOME=D:\grain-dev`. Details: [engine/README.md](../engine/README.md).
 
 Tests use a tiny fake embedder, so no model download is needed:
 ```

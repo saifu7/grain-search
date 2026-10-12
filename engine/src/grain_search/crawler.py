@@ -29,13 +29,44 @@ def _norm(p: str) -> str:
 
 
 class Excluder:
-    def __init__(self, patterns: list[str]):
+    """Decides whether a path is skipped.
+
+    A folder the user added explicitly wins over exclusions that cover that whole folder:
+    adding C:\\Users\\me\\AppData\\Roaming\\Notes indexes it, even though *\\AppData\\* is a
+    default exclusion. Exclusions that match things *inside* the folder still apply, and
+    `always` patterns (the app's own index folder) apply everywhere.
+    """
+
+    def __init__(self, patterns: list[str], roots: list[str] = (), always: list[str] = ()):
         self.patterns = [_norm(p) for p in patterns]
+        self.always = [_norm(p) for p in always]
+        rules = []
+        for r in roots:
+            root = _norm(os.path.abspath(r)).rstrip("/")
+            active = [pat for pat in self.patterns if not self._match(root, pat, is_dir=True)]
+            rules.append((root + "/", active))
+        self.root_rules = sorted(rules, key=lambda x: -len(x[0]))  # most specific root first
+
+    @staticmethod
+    def _match(p: str, pat: str, is_dir: bool) -> bool:
+        probe = p + "/" if is_dir else p  # so "*/node_modules/*" matches the dir itself
+        return fnmatch.fnmatchcase(probe, pat) or fnmatch.fnmatchcase(p, pat)
+
+    def _patterns_for(self, p: str) -> list[str]:
+        for prefix, active in self.root_rules:
+            if (p + "/").startswith(prefix):
+                return active
+        return self.patterns
 
     def __call__(self, path: str, is_dir: bool = False) -> bool:
         p = _norm(path)
-        probe = p + "/" if is_dir else p  # so "*/node_modules/*" matches the dir itself
-        return any(fnmatch.fnmatchcase(probe, pat) or fnmatch.fnmatchcase(p, pat) for pat in self.patterns)
+        return any(self._match(p, pat, is_dir) for pat in self.always) or any(
+            self._match(p, pat, is_dir) for pat in self._patterns_for(p)
+        )
+
+
+def excluder_for(cfg: Config) -> Excluder:
+    return Excluder(cfg.excludes, roots=cfg.roots, always=cfg.own_excludes)
 
 
 def _hidden(entry: os.DirEntry, st: os.stat_result) -> bool:
@@ -46,7 +77,7 @@ def _hidden(entry: os.DirEntry, st: os.stat_result) -> bool:
 
 
 def crawl(cfg: Config, on_error=None) -> Iterator[FileInfo]:
-    excluded = Excluder(cfg.excludes)
+    excluded = excluder_for(cfg)
     max_doc = cfg.max_doc_mb * 1024 * 1024
     max_img = cfg.max_image_mb * 1024 * 1024
     seen_dirs: set[str] = set()

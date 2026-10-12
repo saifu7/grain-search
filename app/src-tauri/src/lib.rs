@@ -22,9 +22,72 @@ const WIDTH_ROUNDED: f64 = 756.0; // 720 panel + 2 x 18 px transparent margin fo
 const WIDTH_GLASS: f64 = 720.0;
 const SERVICE_START_TIMEOUT: Duration = Duration::from_secs(180);
 
+// -- app folders -------------------------------------------------------------------------
+/// Where Grain Search keeps its files. Must match the engine's `paths.py` exactly:
+/// Windows: %APPDATA%\GrainSearch (settings) and %LOCALAPPDATA%\GrainSearch (service.json,
+/// logs, index); elsewhere the XDG folders; GRAIN_SEARCH_HOME=<folder> puts everything there.
+#[derive(Clone, Debug, PartialEq)]
+struct AppDirs {
+    config: PathBuf,
+    data: PathBuf,
+}
+
+impl AppDirs {
+    fn service_file(&self) -> PathBuf {
+        self.data.join("service.json")
+    }
+    fn log_file(&self) -> PathBuf {
+        self.data.join("logs").join("service.log")
+    }
+}
+
+fn resolve_app_dirs(get: impl Fn(&str) -> Option<String>, windows: bool) -> AppDirs {
+    let var = |k: &str| {
+        get(k)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    if let Some(home) = var("GRAIN_SEARCH_HOME") {
+        let p = PathBuf::from(home);
+        return AppDirs {
+            config: p.clone(),
+            data: p,
+        };
+    }
+    if windows {
+        let user = var("USERPROFILE").unwrap_or_default();
+        let roaming = var("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(&user).join("AppData").join("Roaming"));
+        let local = var("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(&user).join("AppData").join("Local"));
+        return AppDirs {
+            config: roaming.join("GrainSearch"),
+            data: local.join("GrainSearch"),
+        };
+    }
+    let home = PathBuf::from(var("HOME").unwrap_or_default());
+    let config = var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"));
+    let data = var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".local").join("share"));
+    AppDirs {
+        config: config.join("grain-search"),
+        data: data.join("grain-search"),
+    }
+}
+
+fn app_dirs() -> AppDirs {
+    resolve_app_dirs(|k| std::env::var(k).ok(), cfg!(windows))
+}
+
 // -- settings ------------------------------------------------------------------------------
-/// Optional `settings.json`, looked up in %APPDATA%\app.grainsearch.desktop\ and then
-/// in the `app` folder of the repository (development builds). Every field is optional.
+/// Optional `settings.json` (window/hotkey options), looked up in the settings folder
+/// (%APPDATA%\GrainSearch\) and then in the repository's `app` folder (development builds).
+/// Every field is optional. Search settings live in config.json, managed by the engine.
 #[derive(Clone, Deserialize)]
 #[serde(default)]
 struct Settings {
@@ -45,16 +108,13 @@ impl Default for Settings {
     }
 }
 
-fn load_settings(app: &AppHandle) -> Settings {
-    let mut candidates = vec![];
-    if let Ok(dir) = app.path().app_config_dir() {
-        candidates.push(dir.join("settings.json"));
-    }
-    candidates.push(
+fn load_settings(dirs: &AppDirs) -> Settings {
+    let candidates = [
+        dirs.config.join("settings.json"),
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("settings.json"),
-    );
+    ];
     for p in candidates {
         if let Ok(text) = fs::read_to_string(&p) {
             if let Ok(s) = serde_json::from_str::<Settings>(&text) {
@@ -65,7 +125,8 @@ fn load_settings(app: &AppHandle) -> Settings {
     Settings::default()
 }
 
-/// The engine folder (where the engine's `pyproject.toml` and `data\` live).
+/// The engine folder (where the engine's `pyproject.toml` is) - development builds run
+/// `uv run grain serve` there. Replaced by the installed runtime in a later phase.
 fn project_dir(s: &Settings) -> PathBuf {
     if let Some(p) = &s.project_dir {
         return PathBuf::from(p);
@@ -93,6 +154,7 @@ fn strip_unc(p: PathBuf) -> PathBuf {
 // -- app state -----------------------------------------------------------------------------
 struct AppState {
     settings: Settings,
+    dirs: AppDirs,
     child: Arc<Mutex<Option<Child>>>,
     hotkey_error: Mutex<Option<String>>,
 }
@@ -111,8 +173,8 @@ struct UiSettings {
 }
 
 // -- talking to the service (tiny HTTP client, 127.0.0.1 only) ---------------------------
-fn read_info(dir: &Path) -> Option<ServiceInfo> {
-    let text = fs::read_to_string(dir.join("data").join("service.json")).ok()?;
+fn read_info(service_file: &Path) -> Option<ServiceInfo> {
+    let text = fs::read_to_string(service_file).ok()?;
     serde_json::from_str(&text).ok()
 }
 
@@ -136,10 +198,13 @@ fn healthy(info: &ServiceInfo) -> bool {
     http(info, "GET", "/health") == Some(200)
 }
 
-fn spawn_service(s: &Settings, dir: &Path) -> Result<Child, String> {
-    let data = dir.join("data");
-    fs::create_dir_all(&data).map_err(|e| format!("Cannot create {}: {e}", data.display()))?;
-    let log = fs::File::create(data.join("service.log")).map_err(|e| e.to_string())?;
+fn spawn_service(s: &Settings, dir: &Path, dirs: &AppDirs) -> Result<Child, String> {
+    let log_path = dirs.log_file();
+    if let Some(logs) = log_path.parent() {
+        fs::create_dir_all(logs).map_err(|e| format!("Cannot create {}: {e}", logs.display()))?;
+    }
+    let log = fs::File::create(&log_path)
+        .map_err(|e| format!("Cannot write {}: {e}", log_path.display()))?;
     let log2 = log.try_clone().map_err(|e| e.to_string())?;
     let uv = s.uv.clone().unwrap_or_else(|| "uv".into());
     let mut cmd = Command::new(&uv);
@@ -167,10 +232,12 @@ fn spawn_service(s: &Settings, dir: &Path) -> Result<Child, String> {
 #[tauri::command]
 async fn ensure_service(state: tauri::State<'_, AppState>) -> Result<ServiceInfo, String> {
     let settings = state.settings.clone();
+    let dirs = state.dirs.clone();
     let child = state.child.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let dir = project_dir(&settings);
-        if let Some(info) = read_info(&dir) {
+        let service_file = dirs.service_file();
+        if let Some(info) = read_info(&service_file) {
             if healthy(&info) {
                 return Ok(info);
             }
@@ -182,12 +249,12 @@ async fn ensure_service(state: tauri::State<'_, AppState>) -> Result<ServiceInfo
                 .map(|c| matches!(c.try_wait(), Ok(None)))
                 .unwrap_or(false);
             if !running {
-                *guard = Some(spawn_service(&settings, &dir)?);
+                *guard = Some(spawn_service(&settings, &dir, &dirs)?);
             }
         }
         let deadline = Instant::now() + SERVICE_START_TIMEOUT;
         loop {
-            if let Some(info) = read_info(&dir) {
+            if let Some(info) = read_info(&service_file) {
                 if healthy(&info) {
                     return Ok(info);
                 }
@@ -196,14 +263,15 @@ async fn ensure_service(state: tauri::State<'_, AppState>) -> Result<ServiceInfo
                 if let Ok(Some(code)) = c.try_wait() {
                     return Err(format!(
                         "The search service stopped ({code}). Details: {}",
-                        dir.join("data").join("service.log").display()
+                        dirs.log_file().display()
                     ));
                 }
             }
             if Instant::now() > deadline {
-                return Err(
-                    "The search service took too long to start (see data\\service.log).".into(),
-                );
+                return Err(format!(
+                    "The search service took too long to start (see {}).",
+                    dirs.log_file().display()
+                ));
             }
             std::thread::sleep(Duration::from_millis(400));
         }
@@ -217,7 +285,7 @@ fn stop_service(app: &AppHandle) {
     let state = app.state::<AppState>();
     let mut guard = state.child.lock().unwrap();
     if let Some(mut c) = guard.take() {
-        if let Some(info) = read_info(&project_dir(&state.settings)) {
+        if let Some(info) = read_info(&state.dirs.service_file()) {
             let _ = http(&info, "POST", "/shutdown");
         }
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -233,7 +301,7 @@ fn stop_service(app: &AppHandle) {
 
 fn service_post(app: &AppHandle, path: &str) {
     let state = app.state::<AppState>();
-    if let Some(info) = read_info(&project_dir(&state.settings)) {
+    if let Some(info) = read_info(&state.dirs.service_file()) {
         let _ = http(&info, "POST", path);
     }
 }
@@ -410,9 +478,11 @@ pub fn run() {
         )
         .setup(|app| {
             let handle = app.handle().clone();
-            let settings = load_settings(&handle);
+            let dirs = app_dirs();
+            let settings = load_settings(&dirs);
             app.manage(AppState {
                 settings: settings.clone(),
+                dirs,
                 child: Arc::new(Mutex::new(None)),
                 hotkey_error: Mutex::new(None),
             });
@@ -486,17 +556,76 @@ mod tests {
     #[test]
     fn read_info_parses_service_file() {
         let dir = std::env::temp_dir().join(format!("grain-test-{}", std::process::id()));
-        fs::create_dir_all(dir.join("data")).unwrap();
-        assert!(read_info(&dir).is_none());
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("service.json");
+        assert!(read_info(&file).is_none());
         fs::write(
-            dir.join("data").join("service.json"),
+            &file,
             r#"{"url": "http://127.0.0.1:8766", "token": "abc", "pid": 1}"#,
         )
         .unwrap();
-        let info = read_info(&dir).expect("service.json should parse");
+        let info = read_info(&file).expect("service.json should parse");
         assert_eq!(info.url, "http://127.0.0.1:8766");
         assert_eq!(info.token, "abc");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |k| {
+            pairs
+                .iter()
+                .find(|(key, _)| *key == k)
+                .map(|(_, v)| v.to_string())
+        }
+    }
+
+    // Same cases as engine/tests/test_config.py::AppPathsTest - the two sides must agree.
+    #[test]
+    fn app_dirs_windows() {
+        let d = resolve_app_dirs(
+            env(&[("APPDATA", r"C:\U\R"), ("LOCALAPPDATA", r"C:\U\L")]),
+            true,
+        );
+        assert_eq!(d.config, PathBuf::from(r"C:\U\R").join("GrainSearch"));
+        assert_eq!(d.data, PathBuf::from(r"C:\U\L").join("GrainSearch"));
+        assert_eq!(d.service_file(), d.data.join("service.json"));
+        assert_eq!(d.log_file(), d.data.join("logs").join("service.log"));
+    }
+
+    #[test]
+    fn app_dirs_windows_fallback_to_userprofile() {
+        let d = resolve_app_dirs(env(&[("USERPROFILE", r"C:\Users\me")]), true);
+        assert!(d.config.to_string_lossy().contains("Roaming"));
+        assert!(d.data.to_string_lossy().contains("Local"));
+    }
+
+    #[test]
+    fn app_dirs_posix_follows_xdg() {
+        let d = resolve_app_dirs(env(&[("HOME", "/home/me")]), false);
+        assert_eq!(d.config, PathBuf::from("/home/me/.config/grain-search"));
+        assert_eq!(d.data, PathBuf::from("/home/me/.local/share/grain-search"));
+        let d = resolve_app_dirs(
+            env(&[
+                ("HOME", "/home/me"),
+                ("XDG_CONFIG_HOME", "/c"),
+                ("XDG_DATA_HOME", "/d"),
+            ]),
+            false,
+        );
+        assert_eq!(d.config, PathBuf::from("/c/grain-search"));
+        assert_eq!(d.data, PathBuf::from("/d/grain-search"));
+    }
+
+    #[test]
+    fn app_dirs_home_override() {
+        for win in [true, false] {
+            let d = resolve_app_dirs(
+                env(&[("GRAIN_SEARCH_HOME", "/x/profile"), ("APPDATA", "/nope")]),
+                win,
+            );
+            assert_eq!(d.config, PathBuf::from("/x/profile"));
+            assert_eq!(d.data, PathBuf::from("/x/profile"));
+        }
     }
 
     #[test]

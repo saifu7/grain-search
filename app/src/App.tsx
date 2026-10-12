@@ -427,6 +427,7 @@ function Footer({ status, toast, settings }: { status: Status | null; toast: str
     else if (ix?.phase === "indexing") left = `Indexing ${ix.done.toLocaleString()} / ${ix.total.toLocaleString()} · ${files} files · ${dev}`;
     else if (ix?.phase === "scanning" || ix?.phase === "loading") left = `Checking for changes… · ${files} files`;
     else left = `${files} files indexed · ${dev}`;
+    if (status.setup_needed) left = "No folders yet. Add one with:  grain folders add <folder>";
   }
   if (settings.hotkey_error) left = `Hotkey ${settings.hotkey} unavailable: ${settings.hotkey_error}`;
   return (

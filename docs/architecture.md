@@ -62,7 +62,8 @@ export is proven; the HTTP boundary means the app would not change.
 ```
 engine/src/grain_search/
 ├─ cli.py            `grain` command: index, search, open, status, reset, serve, interactive
-├─ config.py         Config/ModelCfg dataclasses, config.yaml loading, default exclusions
+├─ paths.py          the app folders (%APPDATA% / %LOCALAPPDATA% / GRAIN_SEARCH_HOME); mirrored in lib.rs
+├─ config.py         Config/ModelCfg dataclasses, config.json load/save, default exclusions
 ├─ crawler.py        walks folders, applies exclusions/hidden/size rules, quick content hash
 ├─ extractors/       text.py · pdf.py (PyMuPDF → pypdf fallback) · office.py (docx/pptx/xlsx) · image.py
 ├─ chunker.py        splits text into ~350-token overlapping chunks, keeps page/line positions
@@ -305,19 +306,25 @@ Report vulnerabilities privately: [SECURITY.md](../SECURITY.md).
 
 ## 8. Where things live on disk
 
-| What | Now (development) | Planned (installed app, Phase 1/4) |
+| What | Now | Planned (installed app) |
 |---|---|---|
-| App binary | `app/src-tauri/target/…` | `%LOCALAPPDATA%\Programs\Grain Search\` |
-| Settings | `engine/config.yaml` + `app/settings.json` | `%APPDATA%\GrainSearch\config.json` (Settings window) |
-| Index, vectors, thumbnails | `engine/data/` | `%LOCALAPPDATA%\GrainSearch\index\` (movable to another drive) |
-| Python + PyTorch | `engine/.venv` (uv) | `%LOCALAPPDATA%\GrainSearch\runtime\` (set up on first run) |
-| Model weights | Hugging Face cache | `%LOCALAPPDATA%\GrainSearch\models\` |
-| Logs | `engine/data/service.log` | `%LOCALAPPDATA%\GrainSearch\logs\` (rotated) |
-| Service handshake | `engine/data/service.json` | `%LOCALAPPDATA%\GrainSearch\service.json` |
-| Port | fixed 8766 | chosen by the OS at start |
+| App binary | `app/src-tauri/target/…` (development build) | `%LOCALAPPDATA%\Programs\Grain Search\` (Phase 4) |
+| Search settings (folders, exclusions…) | `%APPDATA%\GrainSearch\config.json` | same, edited in the Settings window |
+| Window settings (hotkey, look) | `%APPDATA%\GrainSearch\settings.json` | merged into config.json (Settings window) |
+| Index, vectors, thumbnails | `%LOCALAPPDATA%\GrainSearch\index\` (`index_dir` in config.json moves it) | same, "Move index" button |
+| Logs | `%LOCALAPPDATA%\GrainSearch\logs\service.log` | same, rotated |
+| Service handshake | `%LOCALAPPDATA%\GrainSearch\service.json` | same |
+| Python + PyTorch | `engine/.venv` (uv, development) | `%LOCALAPPDATA%\GrainSearch\runtime\` (Phase 4) |
+| Model weights | Hugging Face cache | `%LOCALAPPDATA%\GrainSearch\models\` (Phase 4) |
+| Port | fixed 8766 | chosen by the OS at start (Phase 1) |
 
-Everything under `engine/data/` and every `config.yaml` / `settings.json` is git-ignored and
-blocked by CI. They contain text from the user's own files.
+`paths.py` (engine) and `resolve_app_dirs` (app) apply the same rules and are tested against the
+same cases. `GRAIN_SEARCH_HOME=<folder>` puts everything in one folder (portable or test profile).
+On Linux/macOS the XDG folders are used (`~/.config/grain-search`, `~/.local/share/grain-search`).
+
+None of these folders is inside the repository. Any `config.yaml`, `config.json`, `settings.json`,
+index or `data/` folder is still git-ignored and blocked by CI, because they hold personal paths
+and text from the user's own files.
 
 ---
 
@@ -359,10 +366,10 @@ sequenceDiagram
 
 | Layer | How | Where |
 |---|---|---|
-| Engine logic | `pytest` with `HashEmbedder`, a deterministic fake that needs no model or GPU. It builds real PDFs, Word, PowerPoint and Excel files in a temp folder | `engine/tests/` (66 tests), CI on Linux + Windows |
+| Engine logic | `pytest` with `HashEmbedder`, a deterministic fake that needs no model or GPU. It builds real PDFs, Word, PowerPoint and Excel files in a temp folder | `engine/tests/`, CI on Linux + Windows |
 | Model contract | A fake SentenceTransformer checks prompts, dtype, truncation, OOM halving | `test_embedder_contract.py` |
 | Service | A real uvicorn server on a free port: auth, SSE stages, previews, path safety, watcher, pause/resume, GPU-full retry | `test_service.py` |
-| Rust shell | Unit tests for settings, the service file and the tiny HTTP client | `app/src-tauri/src/lib.rs`, CI on Windows |
+| Rust shell | Unit tests for settings, app folders (same cases as `test_config.py`), the service file and the tiny HTTP client | `app/src-tauri/src/lib.rs`, CI on Windows |
 | UI smoothness | **Planned (Phase 3):** Playwright test measuring layout shift (CLS < 0.02) | `app/tests/` |
 | Real model quality | Golden queries on your own files, run by hand | `engine/scripts/eval_golden.py` |
 

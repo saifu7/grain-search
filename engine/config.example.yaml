@@ -1,5 +1,7 @@
-# Copy to config.yaml and edit. Without config.yaml, Documents, Desktop,
-# Downloads and Pictures in your user folder are indexed.
+# Every setting Grain Search understands, with its default. Your real settings live in
+# %APPDATA%\GrainSearch\config.json (the same keys, as JSON) and are normally changed with
+# `grain folders ...` / `grain exclude ...` or the app. Nothing is indexed until you add folders.
+# You can also run with this format directly:  grain --config my-settings.yaml ...
 
 roots:
   - "%USERPROFILE%\\Documents"
@@ -23,7 +25,6 @@ excludes:
   - "*\\venv\\*"
   - "*\\__pycache__\\*"
   - "*\\site-packages\\*"
-  - "*\\grain-search\\engine\\data\\*"
 
 limits:
   max_doc_mb: 50
