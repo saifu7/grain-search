@@ -23,7 +23,7 @@ jobs:
           fetch-depth: 0
       - name: No personal data, versions in sync
         run: python3 scripts/check_repo.py
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       - name: Lint repository scripts
         run: |
           uvx ruff check scripts
@@ -46,7 +46,7 @@ jobs:
         working-directory: engine
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
       - name: Lock file is up to date
