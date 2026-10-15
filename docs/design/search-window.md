@@ -104,8 +104,8 @@ strong meaning match. Every Enter is logged (locally) so things you open often r
 
 ## 5. Search service API
 
-All on `127.0.0.1:8766`, every request carries `Authorization: Bearer <token>` read from
-`data/service.token` (random, created on first start).
+All on `127.0.0.1`, on a port the OS picks at start. The address and a random token (new on every
+start) are in `service.json`; every request carries `Authorization: Bearer <token>`.
 
 | Endpoint | Purpose |
 |---|---|

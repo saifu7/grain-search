@@ -511,3 +511,118 @@ class AutoPauseTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAVE_WEB, "starlette/uvicorn not installed")
+class ServeTest(unittest.TestCase):
+    """`grain serve` end to end: any free port, service.json, refusing a second copy, clean exit."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        (self.tmp / "files").mkdir()
+        self.cfg = Config(roots=[str(self.tmp / "files")], data_dir=self.tmp / "data")
+        self.cfg.service_file = self.tmp / "service.json"
+        self.logs: list[str] = []
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _serve(self, port=0):
+        from grain_search.service import serve
+
+        result = {}
+        t = threading.Thread(
+            target=lambda: result.setdefault(
+                "code", serve(self.cfg, HashEmbedder(), port=port, watch=False, log=self.logs.append)
+            ),
+            daemon=True,
+        )
+        t.start()
+        return t, result
+
+    def _info(self):
+        try:
+            return json.loads(self.cfg.service_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def _call(self, info, method, path):
+        req = urllib.request.Request(
+            info["url"] + path, method=method, headers={"Authorization": f"Bearer {info['token']}"}
+        )
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status
+
+    def test_free_port_service_file_and_clean_exit(self):
+        t, result = self._serve()
+        self.assertTrue(wait_for(lambda: self._info() is not None), self.logs)
+        info = self._info()
+        port = int(info["url"].rsplit(":", 1)[1])
+        self.assertNotEqual(port, 0)
+        self.assertNotEqual(port, 8766, "should not fall back to the old fixed port")
+        self.assertEqual(info["pid"], os.getpid())
+        self.assertTrue(wait_for(lambda: self._call(info, "GET", "/health") == 200))
+
+        # a second copy refuses to start instead of fighting over the index
+        from grain_search.service import serve
+
+        code = serve(self.cfg, HashEmbedder(), port=0, watch=False, log=self.logs.append)
+        self.assertEqual(code, 1)
+        self.assertIn("already running", self.logs[-1])
+        self.assertEqual(self._info(), info, "the running service's service.json must be left alone")
+
+        self.assertEqual(self._call(info, "POST", "/shutdown"), 200)
+        t.join(20)
+        self.assertFalse(t.is_alive())
+        self.assertEqual(result["code"], 0)
+        self.assertFalse(self.cfg.service_path.exists(), "service.json is removed on exit")
+
+    def test_fixed_port_that_is_taken(self):
+        with socket.socket() as busy:
+            busy.bind(("127.0.0.1", 0))
+            busy.listen()
+            port = busy.getsockname()[1]
+            t, result = self._serve(port)
+            t.join(20)
+        self.assertEqual(result.get("code"), 1)
+        self.assertIn("Cannot listen", self.logs[-1])
+        self.assertFalse(self.cfg.service_path.exists())
+
+
+class BindSocketTest(unittest.TestCase):
+    def test_port_zero_picks_a_free_port(self):
+        from grain_search.service import bind_socket
+
+        a, b = bind_socket("127.0.0.1", 0), bind_socket("localhost", 0)
+        try:
+            pa, pb = a.getsockname()[1], b.getsockname()[1]
+            self.assertGreater(pa, 0)
+            self.assertNotEqual(pa, pb)
+            self.assertEqual(b.getsockname()[0], "127.0.0.1")
+        finally:
+            a.close()
+            b.close()
+
+    def test_service_url_brackets_ipv6(self):
+        from grain_search.service import service_url
+
+        self.assertEqual(service_url("127.0.0.1", 5), "http://127.0.0.1:5")
+        self.assertEqual(service_url("::1", 5), "http://[::1]:5")
+
+
+class ServiceFileTest(unittest.TestCase):
+    def test_only_removes_its_own_service_file(self):
+        from grain_search.service import _remove_service_file
+
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            cfg = Config(roots=[], data_dir=tmp)
+            cfg.service_file = tmp / "service.json"
+            cfg.service_file.write_text(json.dumps({"pid": os.getpid() + 1}), encoding="utf-8")
+            _remove_service_file(cfg)
+            self.assertTrue(cfg.service_file.exists(), "another process's file must stay")
+            cfg.service_file.write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
+            _remove_service_file(cfg)
+            self.assertFalse(cfg.service_file.exists())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)

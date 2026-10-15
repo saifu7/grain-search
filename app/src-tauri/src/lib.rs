@@ -1,6 +1,7 @@
 //! Grain Search shell: global hotkey, hidden-but-preloaded window, tray icon, autostart,
-//! and starting/stopping the Python search service (`uv run grain serve`).
+//! and starting/stopping the Python search service (`uv run grain serve`, on any free port).
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -88,15 +89,17 @@ fn app_dirs() -> AppDirs {
 }
 
 // -- settings ------------------------------------------------------------------------------
-/// Optional `settings.json` (window/hotkey options), looked up in the settings folder
-/// (%APPDATA%\GrainSearch\) and then in the repository's `app` folder (development builds).
+/// Optional `settings.json` (window/hotkey options) in the settings folder (%APPDATA%\GrainSearch\).
 /// Every field is optional. Search settings live in config.json, managed by the engine.
 #[derive(Clone, Deserialize)]
 #[serde(default)]
 struct Settings {
     hotkey: String,
     glass: bool,
-    project_dir: Option<String>,
+    /// The engine folder; normally found automatically (see `find_engine_dir`).
+    #[serde(alias = "project_dir")]
+    engine_dir: Option<String>,
+    /// Full path to uv; normally found automatically (see `find_uv`).
     uv: Option<String>,
 }
 
@@ -105,44 +108,83 @@ impl Default for Settings {
         Self {
             hotkey: "Alt+Space".into(),
             glass: false,
-            project_dir: None,
+            engine_dir: None,
             uv: None,
         }
     }
 }
 
 fn load_settings(dirs: &AppDirs) -> Settings {
-    let candidates = [
-        dirs.config.join("settings.json"),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("settings.json"),
-    ];
-    for p in candidates {
-        if let Ok(text) = fs::read_to_string(&p) {
-            if let Ok(s) = serde_json::from_str::<Settings>(&text) {
-                return s;
-            }
-        }
-    }
-    Settings::default()
+    fs::read_to_string(dirs.config.join("settings.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Settings>(&text).ok())
+        .unwrap_or_default()
 }
 
-/// The engine folder (where the engine's `pyproject.toml` is) - development builds run
-/// `uv run grain serve` there. Replaced by the installed runtime in a later phase.
-fn project_dir(s: &Settings) -> PathBuf {
-    if let Some(p) = &s.project_dir {
-        return PathBuf::from(p);
+// -- finding the engine and uv ---------------------------------------------------------------
+/// A folder holding the Python engine (`pyproject.toml` + `src/grain_search`).
+fn is_engine_dir(p: &Path) -> bool {
+    p.join("pyproject.toml").is_file() && p.join("src").join("grain_search").is_dir()
+}
+
+/// Where the engine is, decided at run time so the app works wherever it is installed or built:
+/// 1. `engine_dir` in settings.json, 2. GRAIN_SEARCH_ENGINE_DIR,
+/// 3. an `engine` folder next to the app or in a folder above it - next to the installed
+///    app, or `<repo>/engine` for a development build in `<repo>/app/src-tauri/target/debug`.
+fn find_engine_dir(
+    configured: Option<&str>,
+    env_dir: Option<String>,
+    exe: Option<PathBuf>,
+) -> Result<PathBuf, String> {
+    let given = configured
+        .map(str::to_string)
+        .or(env_dir)
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    if let Some(p) = given {
+        let p = PathBuf::from(p);
+        return if is_engine_dir(&p) {
+            Ok(p)
+        } else {
+            Err(format!(
+                "The engine folder {} has no pyproject.toml / src\\grain_search. Check \"engine_dir\" in settings.json or GRAIN_SEARCH_ENGINE_DIR.",
+                p.display()
+            ))
+        };
     }
-    if let Ok(p) = std::env::var("GRAIN_SEARCH_ENGINE_DIR") {
-        return PathBuf::from(p);
+    let start = exe.as_deref().and_then(Path::parent);
+    for dir in start.into_iter().flat_map(Path::ancestors).take(8) {
+        let candidate = dir.join("engine");
+        if is_engine_dir(&candidate) {
+            return Ok(candidate.canonicalize().map(strip_unc).unwrap_or(candidate));
+        }
     }
-    // app/src-tauri -> <repo>/engine (development builds only; replaced by app folders in Phase 1)
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("engine");
-    p.canonicalize().map(strip_unc).unwrap_or(p)
+    Err(format!(
+        "Could not find the Grain Search engine near {}. Set \"engine_dir\" in {} or the GRAIN_SEARCH_ENGINE_DIR environment variable to the repository's engine folder.",
+        start.map(|p| p.display().to_string()).unwrap_or_else(|| "the app".into()),
+        app_dirs().config.join("settings.json").display()
+    ))
+}
+
+/// The uv program: settings.json "uv", else on PATH, else where the uv installers put it
+/// (apps started from the Start menu or at sign-in may not see a PATH changed later).
+fn find_uv(configured: Option<&str>, path_var: Option<OsString>, home: Option<PathBuf>) -> PathBuf {
+    if let Some(u) = configured.map(str::trim).filter(|u| !u.is_empty()) {
+        return PathBuf::from(u);
+    }
+    let name = if cfg!(windows) { "uv.exe" } else { "uv" };
+    let on_path = path_var
+        .iter()
+        .flat_map(std::env::split_paths)
+        .map(|d| d.join(name));
+    let usual = home
+        .iter()
+        .flat_map(|h| [h.join(".local").join("bin"), h.join(".cargo").join("bin")])
+        .map(|d| d.join(name));
+    on_path
+        .chain(usual)
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| PathBuf::from(name))
 }
 
 /// `canonicalize` on Windows returns `\\?\C:\...`; uv and Python prefer plain paths.
@@ -206,10 +248,18 @@ fn spawn_service(s: &Settings, dir: &Path, dirs: &AppDirs) -> Result<Child, Stri
     if let Some(logs) = log_path.parent() {
         fs::create_dir_all(logs).map_err(|e| format!("Cannot create {}: {e}", logs.display()))?;
     }
-    let log = fs::File::create(&log_path)
+    let mut log = fs::File::create(&log_path)
         .map_err(|e| format!("Cannot write {}: {e}", log_path.display()))?;
+    let home =
+        std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from);
+    let uv = find_uv(s.uv.as_deref(), std::env::var_os("PATH"), home);
+    let _ = writeln!(
+        log,
+        "Starting: {} run grain serve  (in {})",
+        uv.display(),
+        dir.display()
+    );
     let log2 = log.try_clone().map_err(|e| e.to_string())?;
-    let uv = s.uv.clone().unwrap_or_else(|| "uv".into());
     let mut cmd = Command::new(&uv);
     cmd.args(["run", "grain", "serve"])
         .current_dir(dir)
@@ -225,7 +275,8 @@ fn spawn_service(s: &Settings, dir: &Path, dirs: &AppDirs) -> Result<Child, Stri
     }
     cmd.spawn().map_err(|e| {
         format!(
-            "Could not start `{uv} run grain serve` in {}: {e}. Is uv installed? You can set \"uv\" to its full path in settings.json.",
+            "Could not start `{} run grain serve` in {}: {e}. Is uv installed? You can set \"uv\" to its full path in settings.json.",
+            uv.display(),
             dir.display()
         )
     })
@@ -238,7 +289,6 @@ async fn ensure_service(state: tauri::State<'_, AppState>) -> Result<ServiceInfo
     let dirs = state.dirs.clone();
     let child = state.child.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let dir = project_dir(&settings);
         let service_file = dirs.service_file();
         if let Some(info) = read_info(&service_file) {
             if healthy(&info) {
@@ -252,6 +302,11 @@ async fn ensure_service(state: tauri::State<'_, AppState>) -> Result<ServiceInfo
                 .map(|c| matches!(c.try_wait(), Ok(None)))
                 .unwrap_or(false);
             if !running {
+                let dir = find_engine_dir(
+                    settings.engine_dir.as_deref(),
+                    std::env::var("GRAIN_SEARCH_ENGINE_DIR").ok(),
+                    std::env::current_exe().ok(),
+                )?;
                 *guard = Some(spawn_service(&settings, &dir, &dirs)?);
             }
         }
@@ -619,8 +674,112 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{"glass": true}"#).unwrap();
         assert!(s.glass);
         assert_eq!(s.hotkey, "Alt+Space");
-        assert!(s.project_dir.is_none());
+        assert!(s.engine_dir.is_none());
         assert!(s.uv.is_none());
+        // the old name still works
+        let old: Settings = serde_json::from_str(r#"{"project_dir": "D:/x/engine"}"#).unwrap();
+        assert_eq!(old.engine_dir.as_deref(), Some("D:/x/engine"));
+    }
+
+    /// A temporary folder tree; removed when dropped.
+    struct TempTree(PathBuf);
+    impl TempTree {
+        fn new(name: &str) -> Self {
+            let p = std::env::temp_dir().join(format!("grain-{name}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&p);
+            fs::create_dir_all(&p).unwrap();
+            TempTree(p)
+        }
+        fn engine(&self, rel: &str) -> PathBuf {
+            let e = self.0.join(rel);
+            fs::create_dir_all(e.join("src").join("grain_search")).unwrap();
+            fs::write(e.join("pyproject.toml"), "[project]\n").unwrap();
+            e
+        }
+        fn file(&self, rel: &str) -> PathBuf {
+            let f = self.0.join(rel);
+            fs::create_dir_all(f.parent().unwrap()).unwrap();
+            fs::write(&f, "").unwrap();
+            f
+        }
+    }
+    impl Drop for TempTree {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn same(a: &Path, b: &Path) -> bool {
+        a.canonicalize().unwrap() == b.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn engine_found_from_a_development_build() {
+        let t = TempTree::new("devbuild");
+        let engine = t.engine("repo/engine");
+        let exe = t.file("repo/app/src-tauri/target/debug/grain-search.exe");
+        let found = find_engine_dir(None, None, Some(exe)).unwrap();
+        assert!(same(&found, &engine));
+        assert!(!found.to_string_lossy().starts_with(r"\\?\"));
+    }
+
+    #[test]
+    fn engine_found_next_to_the_installed_app() {
+        let t = TempTree::new("installed");
+        let engine = t.engine("Grain Search/engine");
+        let exe = t.file("Grain Search/grain-search.exe");
+        assert!(same(
+            &find_engine_dir(None, None, Some(exe)).unwrap(),
+            &engine
+        ));
+    }
+
+    #[test]
+    fn engine_setting_wins_and_is_checked() {
+        let t = TempTree::new("setting");
+        let a = t.engine("a/engine");
+        let b = t.engine("b/engine");
+        let exe = t.file("a/app.exe");
+        let pick = |c: Option<&str>, e: Option<&str>| {
+            find_engine_dir(c, e.map(String::from), Some(exe.clone()))
+        };
+        let b_str = b.to_string_lossy().to_string();
+        assert!(same(&pick(Some(&b_str), None).unwrap(), &b));
+        assert!(same(&pick(None, Some(&b_str)).unwrap(), &b));
+        assert!(
+            same(&pick(Some("  "), None).unwrap(), &a),
+            "blank means automatic"
+        );
+        let err = pick(Some(&t.0.join("nope").to_string_lossy()), None).unwrap_err();
+        assert!(err.contains("engine_dir"), "{err}");
+    }
+
+    #[test]
+    fn engine_missing_gives_a_helpful_error() {
+        let t = TempTree::new("missing");
+        let exe = t.file("somewhere/app.exe");
+        let err = find_engine_dir(None, None, Some(exe)).unwrap_err();
+        assert!(err.contains("GRAIN_SEARCH_ENGINE_DIR"), "{err}");
+    }
+
+    #[test]
+    fn uv_from_setting_path_or_usual_places() {
+        let t = TempTree::new("uv");
+        let name = if cfg!(windows) { "uv.exe" } else { "uv" };
+        assert_eq!(
+            find_uv(Some(r"C:\tools\uv.exe"), None, None),
+            PathBuf::from(r"C:\tools\uv.exe")
+        );
+        // not on PATH, not installed: fall back to the bare name (the error message explains)
+        assert_eq!(find_uv(None, None, None), PathBuf::from(name));
+        // installed by the official installer in ~/.local/bin, which is not on PATH
+        let home = t.0.join("home");
+        let installed = t.file(&format!("home/.local/bin/{name}"));
+        assert_eq!(find_uv(None, None, Some(home.clone())), installed);
+        // PATH comes first
+        let on_path = t.file(&format!("tools/{name}"));
+        let path = std::env::join_paths([t.0.join("empty"), t.0.join("tools")]).unwrap();
+        assert_eq!(find_uv(None, Some(path), Some(home)), on_path);
     }
 
     #[test]

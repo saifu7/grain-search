@@ -20,7 +20,7 @@ checksums and build attestations, Dependabot, CodeQL.
 ### Phase 1: Portable foundation
 - One place that resolves app folders (`%APPDATA%\GrainSearch`, `%LOCALAPPDATA%\GrainSearch`).
 - Settings in `config.json`. **No folders indexed until the user picks them.**
-- Nothing machine-specific compiled in; free port chosen at start.
+- ✅ Nothing machine-specific compiled in (engine folder and uv found at run time); free port chosen at start.
 - The service always stops with the app (Windows Job Object); the model unloads from the GPU when idle.
 - Crash restart with back-off; rotating logs; "Open logs" in the tray.
 

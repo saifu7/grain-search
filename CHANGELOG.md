@@ -29,6 +29,12 @@ index format; the app migrates or rebuilds automatically and the notes say so.
   icons are generated from `docs/assets/logo.svg`.
 
 ### Changed
+- The search service listens on a free port chosen at start instead of the fixed 8766, so it no
+  longer clashes with other programs; a second copy refuses to start instead of fighting over the
+  index. The address is in `service.json`, as before.
+- The app no longer has the build machine's engine path compiled in: it finds the engine folder
+  and `uv` when it starts (`engine_dir` replaces `project_dir` in settings.json; the old name still
+  works). The log's first line says which ones it used.
 - Removing a folder or adding an exclusion now removes those files from the index (before, only
   files deleted from disk were removed), and hides them from results straight away.
 - The search service closes its database on shutdown (no locked index file afterwards).

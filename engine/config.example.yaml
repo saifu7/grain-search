@@ -55,7 +55,7 @@ search:
   related_limit: 3            # ...and at most this many
 
 service:                      # `grain serve` - the background service for the Grain Search window
-  port: 8766                  # listens on 127.0.0.1 only
+  port: 0                     # 127.0.0.1 only; 0 = any free port (recommended)
   watch: true                 # re-index files as soon as they change
   pause_on_fullscreen: true   # pause indexing while a game / full-screen app runs
   pause_on_battery: true

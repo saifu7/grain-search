@@ -317,7 +317,8 @@ Report vulnerabilities privately: [SECURITY.md](../SECURITY.md).
 | Service handshake | `%LOCALAPPDATA%\GrainSearch\service.json` | same |
 | Python + PyTorch | `engine/.venv` (uv, development) | `%LOCALAPPDATA%\GrainSearch\runtime\` (Phase 4) |
 | Model weights | Hugging Face cache | `%LOCALAPPDATA%\GrainSearch\models\` (Phase 4) |
-| Port | fixed 8766 | chosen by the OS at start (Phase 1) |
+| Port | chosen by the OS at start, written to `service.json` | same |
+| Engine folder | found at run time: `engine` next to the app or in a folder above it (development: `<repo>\engine`); `engine_dir` / `GRAIN_SEARCH_ENGINE_DIR` override | bundled runtime (Phase 4) |
 
 `paths.py` (engine) and `resolve_app_dirs` (app) apply the same rules and are tested against the
 same cases. `GRAIN_SEARCH_HOME=<folder>` puts everything in one folder (portable or test profile).

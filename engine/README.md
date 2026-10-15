@@ -67,7 +67,8 @@ uv run grain serve
 
 Keeps EmbeddingGemma 2 loaded (GPU), indexes in the background and re-indexes files the moment
 they change (pauses automatically while a game / full-screen app runs or on battery).
-Listens on `127.0.0.1:8766` only; the address and a secret token are written to
+Listens on `127.0.0.1` only, on a free port chosen at start (`--port` or `service.port` fixes it);
+the address and a secret token are written to
 `%LOCALAPPDATA%\GrainSearch\service.json`, the log to `%LOCALAPPDATA%\GrainSearch\logs\`.
 Stop it with Ctrl+C.
 
