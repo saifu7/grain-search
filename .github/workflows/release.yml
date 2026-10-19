@@ -84,7 +84,7 @@ jobs:
           cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       - name: Build provenance attestation
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: release/*
 
