@@ -21,7 +21,7 @@ export async function ensureService(): Promise<ServiceInfo> {
   if (t) return t.core.invoke<ServiceInfo>("ensure_service");
   const p = new URLSearchParams(location.search);
   const url = p.get("url"), token = p.get("token");
-  if (!url || !token) throw new Error("Open with ?url=http://127.0.0.1:8766&token=… (see service.json in %LOCALAPPDATA%\\GrainSearch)");
+  if (!url || !token) throw new Error("Open with ?url=…&token=… copied from service.json in %LOCALAPPDATA%\\GrainSearch");
   return { url, token };
 }
 

@@ -66,7 +66,7 @@ class Config:
     text_min_score: float = 0.30  # meaning-only document results below this are hidden
     related_margin: float = 0.08  # ...and when real text matches exist, only keep ones close to the best
     related_limit: int = 3  # ...and at most this many
-    port: int = 8766  # grain serve (127.0.0.1 only)
+    port: int = 0  # grain serve, 127.0.0.1 only; 0 = any free port (the window reads it from service.json)
     watch: bool = True  # live updates while the service runs
     pause_on_fullscreen: bool = True
     pause_on_battery: bool = True

@@ -2,29 +2,18 @@
 
 Known issues to fix later, most important first. Each item: what happens, why it matters,
 how to fix it, rough effort. Each one is tracked as a GitHub issue (label `tech-debt`); this file
-is the long-form background. Last updated 12 Oct 2026.
+is the long-form background. Last updated 15 Oct 2026.
 
 ---
 
-## 1. Search service is left running when the app dies  · **High** · ~2 h
+## 1. ~~Search service is left running when the app dies~~ · ✅ Fixed (Phase 1)
 
-**What happens:** the app starts `uv run grain serve` as a separate process. It is only stopped
-by *tray → Quit*. If the app ends any other way — Ctrl+C in the `npm run tauri dev` terminal,
-closing that terminal, a crash, Task Manager — the Python service keeps running on its own,
-with no tray icon, holding ~1.4 GB of GPU memory and indexing in the background.
-
-**Fix:** put the service in a **Windows Job Object** with
-`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (Rust: `windows` crate, `CreateJobObjectW` +
-`SetInformationJobObject` + `AssignProcessToJobObject` right after `spawn`). Windows then ends
-the service automatically whenever the app's process ends, however it ends.
-Note: `uv run` starts Python as a *child* of `uv.exe`; job objects include child processes by
-default, so both are covered.
-
-**Also:** if a service is already running when the app starts (e.g. an old orphan), the app
-currently just connects to it and will never stop it on Quit. Decide: adopt it (stop it on
-Quit via `/shutdown`) or leave it alone. Adopting is simpler for the user.
-
-**Workaround today:** `taskkill /PID <pid> /F`, or `POST /shutdown` (see README).
+The app puts the service in a **Windows job object** with "kill on close"; Windows ends it
+(and `uv`) whenever the app's process ends, however it ends. As a second line, the service
+watches the app's process (`GRAIN_SEARCH_PARENT_PID`) and shuts down cleanly when it is gone,
+which also covers macOS/Linux. Programs the engine opens for the user break away from the job,
+so they stay open. A service started by hand (`uv run grain serve`) is not tied to anything and
+the app leaves it alone, as before.
 
 ---
 

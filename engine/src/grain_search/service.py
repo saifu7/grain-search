@@ -18,6 +18,7 @@ import os
 import queue
 import secrets
 import socket
+import sys
 import threading
 import time
 from dataclasses import asdict
@@ -655,10 +656,105 @@ def running_service(cfg: Config) -> dict | None:
         return None
 
 
-def port_in_use(host: str, port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.3)
-        return s.connect_ex((host, port)) == 0
+def _kernel32():
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    k32.WaitForSingleObject.restype = wintypes.DWORD
+    k32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    k32.GetExitCodeProcess.restype = wintypes.BOOL
+    k32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    return k32
+
+
+def process_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = _kernel32()
+        h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return ctypes.get_last_error() != 87  # 87 = no such process; else e.g. access denied
+        try:
+            code = wintypes.DWORD()
+            return not k32.GetExitCodeProcess(h, ctypes.byref(code)) or code.value == 259  # STILL_ACTIVE
+        finally:
+            k32.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def watch_parent(pid: int, on_gone, poll: float = 2.0) -> threading.Thread:
+    """Call on_gone() once, from a background thread, when process `pid` (the Grain Search app
+    that started us) has ended. The app also ends us through a Windows job object; this lets
+    the service stop cleanly first (saving its caches), and covers macOS/Linux."""
+
+    def wait_poll() -> None:
+        while process_alive(pid):
+            time.sleep(poll)
+
+    def wait_windows() -> None:
+        k32 = _kernel32()
+        handle = k32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+        if not handle:
+            wait_poll()  # gone already (returns at once) or not allowed to wait on it
+            return
+        try:
+            k32.WaitForSingleObject(handle, 0xFFFFFFFF)  # INFINITE
+        finally:
+            k32.CloseHandle(handle)
+
+    def run() -> None:
+        try:
+            (wait_windows if sys.platform == "win32" else wait_poll)()
+        except Exception:
+            wait_poll()
+        on_gone()
+
+    t = threading.Thread(target=run, name="watch-app", daemon=True)
+    t.start()
+    return t
+
+
+def bind_socket(host: str, port: int = 0) -> socket.socket:
+    """Bind the listening socket up front. Port 0 lets the OS pick a free port, so two apps can
+    never fight over a fixed number, and nothing can take the port between choosing and using it.
+    Raises OSError if a fixed port is taken."""
+    host = "127.0.0.1" if host == "localhost" else host
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows: no other program may share the port
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        sock.bind((host, port))
+    except OSError:
+        sock.close()
+        raise
+    return sock
+
+
+def service_url(host: str, port: int) -> str:
+    return f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
+
+
+def _remove_service_file(cfg: Config) -> None:
+    """Remove service.json, but only if it is ours (a newer service may have replaced it)."""
+    try:
+        info = json.loads(cfg.service_path.read_text(encoding="utf-8"))
+        if info.get("pid") == os.getpid():
+            cfg.service_path.unlink()
+    except (OSError, ValueError):
+        pass
 
 
 def write_service_file(cfg: Config, host: str, port: int, token: str) -> Path:
@@ -667,7 +763,7 @@ def write_service_file(cfg: Config, host: str, port: int, token: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(
-        json.dumps({"url": f"http://{host}:{port}", "token": token, "pid": os.getpid(), "version": __version__}),
+        json.dumps({"url": service_url(host, port), "token": token, "pid": os.getpid(), "version": __version__}),
         encoding="utf-8",
     )
     os.replace(tmp, path)
@@ -685,6 +781,9 @@ def _make_graceful_server():
         before our cleanup runs. Here a signal just asks the server to stop."""
 
         def _handlers(self):
+            if threading.current_thread() is not threading.main_thread():
+                return {}  # signals can only be handled on the main thread (tests run it in a thread)
+
             def ask_to_stop(sig, frame):
                 self.should_exit = True
 
@@ -714,7 +813,7 @@ def serve(
     cfg: Config,
     embedder: Embedder,
     host: str = "127.0.0.1",
-    port: int = 8766,
+    port: int = 0,
     background: bool = True,
     watch: bool = True,
     log=print,
@@ -723,28 +822,45 @@ def serve(
 
     if host not in ("127.0.0.1", "localhost", "::1"):
         raise RuntimeError("The service only listens on this PC (127.0.0.1).")
-    if port_in_use(host, port):
-        log(f"Port {port} is already in use - is the service already running? (`grain status` / tray icon)")
+    other = running_service(cfg)
+    if other:
+        log(f"Grain Search is already running at {other.get('url')} - use that one (`grain status`, tray icon).")
         return 1
-    svc = SearchService(cfg, embedder, background=background, watch=watch)
-    log(f"Loading {embedder.model_id} ...")
-    svc.startup()
-    log(f"Model ready on {svc.embedder.device_desc}")
-    info = write_service_file(cfg, host, port, svc.token)
-    log(f"Search service on http://{host}:{port}  (token in {info})")
-    if svc.indexer:
-        log("Background indexing: on" + (" + live file watching" if watch else ""))
-    server = _GracefulServer(
-        uvicorn.Config(svc.app, host=host, port=port, log_level="warning", access_log=False, lifespan="off")
-    )
-    svc.request_exit = lambda: setattr(server, "should_exit", True)
     try:
-        server.run()
+        sock = bind_socket(host, port)
+    except OSError as e:
+        log(
+            f"Cannot listen on {host}:{port} ({e}). Another program is using that port; pick another or use 0 (any free port)."
+        )
+        return 1
+    host, port = sock.getsockname()[:2]
+    svc = None
+    try:
+        svc = SearchService(cfg, embedder, background=background, watch=watch)
+        log(f"Loading {embedder.model_id} ...")
+        svc.startup()
+        log(f"Model ready on {svc.embedder.device_desc}")
+        info = write_service_file(cfg, host, port, svc.token)
+        log(f"Search service on {service_url(host, port)}  (token in {info})")
+        if svc.indexer:
+            log("Background indexing: on" + (" + live file watching" if watch else ""))
+        server = _GracefulServer(
+            uvicorn.Config(svc.app, host=host, port=port, log_level="warning", access_log=False, lifespan="off")
+        )
+        svc.request_exit = lambda: setattr(server, "should_exit", True)
+        parent = os.environ.get("GRAIN_SEARCH_PARENT_PID", "").strip()
+        if parent.isdigit():
+
+            def app_gone() -> None:
+                log("The Grain Search app has closed - stopping.")
+                svc.request_exit()
+
+            watch_parent(int(parent), app_gone)
+        server.run(sockets=[sock])
         log("Stopping...")
     finally:
-        svc.shutdown()
-        try:
-            cfg.service_path.unlink()
-        except OSError:
-            pass
+        if svc is not None:
+            svc.shutdown()
+        sock.close()
+        _remove_service_file(cfg)
     return 0

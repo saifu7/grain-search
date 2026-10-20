@@ -294,7 +294,7 @@ def cmd_serve(args, cfg: Config) -> int:
     return serve(
         cfg,
         emb,
-        port=args.port or cfg.port,
+        port=args.port if args.port is not None else cfg.port,
         background=not args.no_index,
         watch=cfg.watch and not args.no_watch,
         log=lambda s: print(dim(s)),
@@ -402,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status", help="what is indexed").set_defaults(func=cmd_status)
 
     p = sub.add_parser("serve", help="run the background search service for the Grain Search window")
-    p.add_argument("--port", type=int, help="default from the settings (8766)")
+    p.add_argument("--port", type=int, help="fixed port (default: any free port, written to service.json)")
     p.add_argument("--no-index", action="store_true", help="search only, no background indexing")
     p.add_argument("--no-watch", action="store_true", help="no live file watching")
     p.set_defaults(func=cmd_serve)

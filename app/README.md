@@ -45,15 +45,14 @@ is at `#settings`, with a text box instead of the folder picker.
 
 ## Settings (optional)
 
-Copy `settings.example.json` to `settings.json` (this folder) or to
-`%APPDATA%\GrainSearch\settings.json`:
+Copy `settings.example.json` to `%APPDATA%\GrainSearch\settings.json`:
 
 | Key | Default | |
 |---|---|---|
 | `hotkey` | `Alt+Space` | e.g. `Ctrl+Space`, `Alt+Shift+Space` |
 | `glass` | `false` | `true` = real Windows acrylic blur (Windows draws small square-ish corners); `false` = macOS-style rounded frosted bar |
-| `project_dir` | `..\engine` | the engine folder (where its `pyproject.toml` is), for development builds |
-| `uv` | `uv` | full path to `uv.exe` if it isn't on PATH |
+| `engine_dir` | found automatically | the engine folder (where its `pyproject.toml` is). Normally not needed: the app looks for an `engine` folder next to itself and in the folders above it, so a development build finds `<repo>\engine` (the old name `project_dir` still works) |
+| `uv` | found automatically | full path to `uv.exe`; normally found on PATH or in `%USERPROFILE%\.local\bin` |
 
 **Alt+Space taken?** PowerToys Run uses it too: PowerToys → PowerToys Run → change or disable its
 shortcut, or set another `hotkey` here. If the hotkey can't be registered, the bar's footer says so.
@@ -64,4 +63,5 @@ shortcut, or set another `hotkey` here. If the hotkey can't be registered, the b
 uv run grain serve                           # in engine\
 npm run dev                                  # in app\
 ```
-Open `http://localhost:1420/?url=http://127.0.0.1:8766&token=<token from %LOCALAPPDATA%\GrainSearch\service.json>`.
+Open `http://localhost:1420/?url=<url>&token=<token>`, with both values copied from
+`%LOCALAPPDATA%\GrainSearch\service.json` (the port changes every time the service starts).

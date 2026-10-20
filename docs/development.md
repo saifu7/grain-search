@@ -44,8 +44,13 @@ cd app
 npm ci
 npm run tauri dev       # opens the search window (Alt+Space); starts `grain serve` in ..\engine
 ```
-The app looks for the engine in `..\engine` during development. Override with
-`settings.json` (`project_dir`) or the `GRAIN_SEARCH_ENGINE_DIR` environment variable.
+Nothing about your PC is compiled into the app. When it starts, it looks for an `engine`
+folder next to the program and in the folders above it, so a development build in
+`app\src-tauri\target\debug\` finds `..\..\..\..\engine` wherever the repository is. To use a
+different engine folder, set `engine_dir` in `%APPDATA%\GrainSearch\settings.json` or the
+`GRAIN_SEARCH_ENGINE_DIR` environment variable. `uv` is looked up on PATH and in
+`%USERPROFILE%\.local\bin`; set `uv` in settings.json if yours is elsewhere. The first line of
+`%LOCALAPPDATA%\GrainSearch\logs\service.log` says which engine folder and uv were used.
 
 Checks:
 ```
@@ -58,5 +63,8 @@ A local installer (unsigned, for testing): `npm run tauri build`. The output goe
 `app\src-tauri\target\release\bundle\nsis\`.
 
 ## Running next to an older copy
-The development service uses port **8766**. If another copy of the app is running with the same
+The service listens on a free port chosen at start (written to `service.json`), so it never
+clashes with another program. Only one service runs per profile: a second `grain serve` says
+"already running" and exits. To run a completely separate copy (e.g. for testing), give it its own
+profile with `GRAIN_SEARCH_HOME=<folder>`. If another copy of the app is running with the same
 hotkey (`Alt+Space`), quit it first or change `hotkey` in `settings.json`.
