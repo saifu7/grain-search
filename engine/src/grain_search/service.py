@@ -18,6 +18,7 @@ import os
 import queue
 import secrets
 import socket
+import sys
 import threading
 import time
 from dataclasses import asdict
@@ -655,6 +656,76 @@ def running_service(cfg: Config) -> dict | None:
         return None
 
 
+def _kernel32():
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    k32.WaitForSingleObject.restype = wintypes.DWORD
+    k32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    k32.GetExitCodeProcess.restype = wintypes.BOOL
+    k32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    return k32
+
+
+def process_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = _kernel32()
+        h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return ctypes.get_last_error() != 87  # 87 = no such process; else e.g. access denied
+        try:
+            code = wintypes.DWORD()
+            return not k32.GetExitCodeProcess(h, ctypes.byref(code)) or code.value == 259  # STILL_ACTIVE
+        finally:
+            k32.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def watch_parent(pid: int, on_gone, poll: float = 2.0) -> threading.Thread:
+    """Call on_gone() once, from a background thread, when process `pid` (the Grain Search app
+    that started us) has ended. The app also ends us through a Windows job object; this lets
+    the service stop cleanly first (saving its caches), and covers macOS/Linux."""
+
+    def wait_poll() -> None:
+        while process_alive(pid):
+            time.sleep(poll)
+
+    def wait_windows() -> None:
+        k32 = _kernel32()
+        handle = k32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+        if not handle:
+            wait_poll()  # gone already (returns at once) or not allowed to wait on it
+            return
+        try:
+            k32.WaitForSingleObject(handle, 0xFFFFFFFF)  # INFINITE
+        finally:
+            k32.CloseHandle(handle)
+
+    def run() -> None:
+        try:
+            (wait_windows if sys.platform == "win32" else wait_poll)()
+        except Exception:
+            wait_poll()
+        on_gone()
+
+    t = threading.Thread(target=run, name="watch-app", daemon=True)
+    t.start()
+    return t
+
+
 def bind_socket(host: str, port: int = 0) -> socket.socket:
     """Bind the listening socket up front. Port 0 lets the OS pick a free port, so two apps can
     never fight over a fixed number, and nothing can take the port between choosing and using it.
@@ -777,6 +848,14 @@ def serve(
             uvicorn.Config(svc.app, host=host, port=port, log_level="warning", access_log=False, lifespan="off")
         )
         svc.request_exit = lambda: setattr(server, "should_exit", True)
+        parent = os.environ.get("GRAIN_SEARCH_PARENT_PID", "").strip()
+        if parent.isdigit():
+
+            def app_gone() -> None:
+                log("The Grain Search app has closed - stopping.")
+                svc.request_exit()
+
+            watch_parent(int(parent), app_gone)
         server.run(sockets=[sock])
         log("Stopping...")
     finally:

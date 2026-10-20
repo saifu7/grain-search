@@ -46,4 +46,10 @@ index format; the app migrates or rebuilds automatically and the notes say so.
 - A folder you add explicitly is indexed even when a default exclusion covers it (for example a
   notes folder under `AppData`); exclusions that match things inside it still apply.
 
+### Fixed
+- The search service no longer keeps running (holding ~1.4 GB of GPU memory) when the app is
+  closed from Task Manager, crashes, or is stopped with Ctrl+C: Windows ends it together with the
+  app, and the service also stops by itself once the app is gone. Files opened from Grain Search
+  stay open when it quits.
+
 [Unreleased]: https://github.com/saifu7/grain-search/commits/main

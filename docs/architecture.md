@@ -280,8 +280,11 @@ flowchart TB
   checks `/health`, and starts the engine if needed (timeout 180 s, for the first model load).
 - **Shutdown.** Tray → Quit calls `POST /shutdown`. `GracefulServer` exits cleanly and removes
   `service.json`.
-  - **Gap (Now):** if the app is killed, the engine keeps running.
-  - **Planned (Phase 1):** a Windows Job Object ties the engine's life to the app's.
+  - If the app ends any other way (crash, Task Manager, Ctrl+C), Windows ends the engine too:
+    the app starts it inside a job object with "kill on close". The engine also watches the
+    app's process (`GRAIN_SEARCH_PARENT_PID`) and stops cleanly when it is gone. Files the
+    engine opens for the user (Word, SumatraPDF, VS Code) are started outside the job, so
+    quitting Grain Search never closes them.
   - **Planned (Phase 1):** the model unloads after N idle minutes.
 
 ---
@@ -384,7 +387,6 @@ and set their own exclusions, since the temp folder lives under `AppData`.
 
 Tracked in [tech-debt.md](tech-debt.md) and GitHub issues:
 
-- The engine can be orphaned if the app is killed (fixed by the Phase 1 Job Object).
 - The model stays on the GPU while idle (Phase 1 idle unload).
 - Images are indexed after all documents on the first run.
 - Scanned PDF pages without text are detected but not yet searchable.

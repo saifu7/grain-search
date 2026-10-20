@@ -217,6 +217,191 @@ struct UiSettings {
     hotkey_error: Option<String>,
 }
 
+// -- the service dies with the app (Windows) ---------------------------------------------------
+/// The service runs inside a Windows *job object* with "kill on close". Only this app holds the
+/// job's handle, so when the app's process ends - Quit, a crash, Task Manager, Ctrl+C in the
+/// development terminal - Windows closes the handle and ends everything in the job: `uv` and the
+/// Python service it started. Programs the engine opens for the user (Word, a PDF viewer) break
+/// away from the job (`opener.py`), so they stay open.
+///
+/// The few Win32 calls are declared here directly (no extra crate).
+#[cfg(windows)]
+mod job {
+    use std::ffi::c_void;
+    use std::io;
+    use std::os::windows::io::AsRawHandle;
+    use std::process::Child;
+    use std::sync::OnceLock;
+
+    type Handle = *mut c_void;
+
+    const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: i32 = 9; // JobObjectExtendedLimitInformation
+    const JOB_OBJECT_LIMIT_BREAKAWAY_OK: u32 = 0x0000_0800;
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct BasicLimitInformation {
+        per_process_user_time_limit: i64,
+        per_job_user_time_limit: i64,
+        limit_flags: u32,
+        minimum_working_set_size: usize,
+        maximum_working_set_size: usize,
+        active_process_limit: u32,
+        affinity: usize,
+        priority_class: u32,
+        scheduling_class: u32,
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct IoCounters {
+        read_operation_count: u64,
+        write_operation_count: u64,
+        other_operation_count: u64,
+        read_transfer_count: u64,
+        write_transfer_count: u64,
+        other_transfer_count: u64,
+    }
+
+    /// JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    #[repr(C)]
+    #[derive(Default)]
+    struct ExtendedLimitInformation {
+        basic_limit_information: BasicLimitInformation,
+        io_info: IoCounters,
+        process_memory_limit: usize,
+        job_memory_limit: usize,
+        peak_process_memory_used: usize,
+        peak_job_memory_used: usize,
+    }
+
+    // Same size as the Windows SDK's struct, or the build fails.
+    #[cfg(target_pointer_width = "64")]
+    const _: () = assert!(std::mem::size_of::<ExtendedLimitInformation>() == 144);
+    #[cfg(target_pointer_width = "32")]
+    const _: () = assert!(std::mem::size_of::<ExtendedLimitInformation>() == 112);
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateJobObjectW(attributes: *const c_void, name: *const u16) -> Handle;
+        fn SetInformationJobObject(job: Handle, class: i32, info: *const c_void, len: u32) -> i32;
+        fn AssignProcessToJobObject(job: Handle, process: Handle) -> i32;
+        fn CloseHandle(handle: Handle) -> i32;
+    }
+
+    pub struct Job(Handle);
+
+    // The handle is only passed to thread-safe Win32 calls.
+    unsafe impl Send for Job {}
+    unsafe impl Sync for Job {}
+
+    impl Job {
+        pub fn new() -> io::Result<Job> {
+            // SAFETY: plain Win32 calls; `info` outlives the call and has the documented layout.
+            unsafe {
+                let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if handle.is_null() {
+                    return Err(io::Error::last_os_error());
+                }
+                let job = Job(handle);
+                let mut info = ExtendedLimitInformation::default();
+                info.basic_limit_information.limit_flags =
+                    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+                let ok = SetInformationJobObject(
+                    job.0,
+                    JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+                    &info as *const ExtendedLimitInformation as *const c_void,
+                    std::mem::size_of::<ExtendedLimitInformation>() as u32,
+                );
+                if ok == 0 {
+                    return Err(io::Error::last_os_error()); // `job` is dropped: handle closed
+                }
+                Ok(job)
+            }
+        }
+
+        pub fn add(&self, child: &Child) -> io::Result<()> {
+            // SAFETY: both handles are valid for the duration of the call.
+            let ok = unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle() as Handle) };
+            if ok == 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            // SAFETY: we own the handle. Closing the last handle ends the processes in the job.
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+
+    /// The app-wide job. Kept in a static that is never dropped, so the handle stays open
+    /// until the app's process ends - that is the whole point.
+    pub fn add_to_app_job(child: &Child) -> Result<(), String> {
+        static APP_JOB: OnceLock<Result<Job, String>> = OnceLock::new();
+        match APP_JOB.get_or_init(|| Job::new().map_err(|e| e.to_string())) {
+            Ok(job) => job.add(child).map_err(|e| e.to_string()),
+            Err(e) => Err(e.clone()),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        fn exits_within(child: &mut Child, limit: Duration) -> bool {
+            let deadline = Instant::now() + limit;
+            while Instant::now() < deadline {
+                if let Ok(Some(_)) = child.try_wait() {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            false
+        }
+
+        fn long_running() -> Child {
+            // ~30 s; output discarded
+            Command::new("ping")
+                .args(["-n", "30", "127.0.0.1"])
+                .stdout(Stdio::null())
+                .spawn()
+                .expect("start ping")
+        }
+
+        #[test]
+        fn closing_the_job_ends_its_processes() {
+            let job = Job::new().expect("create job");
+            let mut child = long_running();
+            job.add(&child).expect("assign to job");
+            assert!(!exits_within(&mut child, Duration::from_millis(500)));
+            drop(job); // what Windows does when the app's process ends
+            assert!(
+                exits_within(&mut child, Duration::from_secs(5)),
+                "the process should end with the job"
+            );
+        }
+
+        #[test]
+        fn processes_outside_the_job_are_left_alone() {
+            let job = Job::new().expect("create job");
+            let mut child = long_running();
+            drop(job);
+            assert!(!exits_within(&mut child, Duration::from_secs(1)));
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 // -- talking to the service (tiny HTTP client, 127.0.0.1 only) ---------------------------
 fn read_info(service_file: &Path) -> Option<ServiceInfo> {
     let text = fs::read_to_string(service_file).ok()?;
@@ -264,6 +449,8 @@ fn spawn_service(s: &Settings, dir: &Path, dirs: &AppDirs) -> Result<Child, Stri
     cmd.args(["run", "grain", "serve"])
         .current_dir(dir)
         .env("PYTHONUNBUFFERED", "1")
+        // the engine also watches this process and shuts down cleanly when it is gone
+        .env("GRAIN_SEARCH_PARENT_PID", std::process::id().to_string())
         .stdin(Stdio::null())
         .stdout(log)
         .stderr(log2);
@@ -307,7 +494,13 @@ async fn ensure_service(state: tauri::State<'_, AppState>) -> Result<ServiceInfo
                     std::env::var("GRAIN_SEARCH_ENGINE_DIR").ok(),
                     std::env::current_exe().ok(),
                 )?;
-                *guard = Some(spawn_service(&settings, &dir, &dirs)?);
+                let started = spawn_service(&settings, &dir, &dirs)?;
+                #[cfg(windows)]
+                if let Err(e) = job::add_to_app_job(&started) {
+                    // Not fatal: the engine still stops itself when the app is gone.
+                    eprintln!("Could not tie the search service to the app: {e}");
+                }
+                *guard = Some(started);
             }
         }
         let deadline = Instant::now() + SERVICE_START_TIMEOUT;
