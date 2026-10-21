@@ -60,11 +60,36 @@ export interface Preview {
   error?: string;
 }
 
-/** Whether the AI model is in (GPU) memory; tray -> Unload model frees it. */
-export type ModelState = "loaded" | "loading" | "unloaded";
+/** Whether the AI model is in (GPU) memory; tray -> Unload model frees it; "missing" = not downloaded. */
+export type ModelState = "loaded" | "loading" | "unloaded" | "missing";
+
+/** GET /model: the model's files on disk and the download. */
+export interface ModelFiles {
+  state: "missing" | "downloading" | "ready";
+  /** folder = downloaded by Grain Search; cache = already in the Hugging Face cache */
+  source: "folder" | "cache" | "missing";
+  path: string | null;
+  folder: string;
+  models_folder: string;
+  model: string;
+  error: string;
+  total_bytes?: number | null;
+  done_bytes?: number;
+  model_state?: ModelState;
+}
+
+/** Where the AI model runs (empty while it isn't loaded). */
+export interface DeviceInfo {
+  kind?: "gpu" | "cpu";
+  name?: string;
+  memory_mb?: number;
+  /** on the CPU: why (no NVIDIA GPU, CPU-only PyTorch, set to CPU) */
+  reason?: string;
+}
 
 export interface Status {
   device: string;
+  device_info?: DeviceInfo;
   model_state?: ModelState;
   /** why the last attempt to load the model failed, if it did */
   model_error?: string;

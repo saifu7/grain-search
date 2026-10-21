@@ -33,11 +33,12 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from . import __version__, previews, ranking, winstate
-from .config import DEFAULT_EXCLUDES, Config, change_excludes, change_folders, read_raw, save_raw
+from .config import DEFAULT_EXCLUDES, Config, change_excludes, change_folders, read_raw, same_path, save_raw
 from .crawler import count_indexable, is_under
 from .embedder import Embedder, free_gpu_memory, is_out_of_memory
 from .indexer import IndexState, Stopped, index_paths, run_index
 from .known_folders import known_folders
+from .model_files import ModelDownloader, models_folder, use_location
 from .search import Results, Searcher
 from .store import FileRow, Store
 
@@ -81,7 +82,18 @@ class LockedEmbedder:
         return bool(getattr(self.inner, "loaded", True))
 
     @property
+    def available(self) -> bool:
+        """The model's files are on this PC (Settings -> AI model -> Download)."""
+        return bool(getattr(self.inner, "available", True))
+
+    def device_info(self) -> dict:
+        info = getattr(self.inner, "device_info", None)
+        return info() if info else {}
+
+    @property
     def model_state(self) -> str:
+        if not self.available:
+            return "missing"
         if self.loaded:
             return "loaded"
         if self._loading or (self.wanted.is_set() and self.lock.locked()):
@@ -94,7 +106,7 @@ class LockedEmbedder:
 
     def _wait_until_wanted(self) -> None:
         """Background indexing only: while the model is unloaded, wait instead of loading it."""
-        while not self.wanted.wait(0.5):
+        while not (self.wanted.wait(0.5) and self.available):
             if self.closed:
                 raise Stopped()
 
@@ -111,7 +123,7 @@ class LockedEmbedder:
     def load(self, wait: bool = False) -> None:
         """Bring the model back: in the background (Alt+Space), or now (`wait`, a search)."""
         self.wanted.set()
-        if self.loaded:
+        if self.loaded or not self.available:
             return
         if wait:
             self._load_now()
@@ -213,6 +225,8 @@ class BackgroundIndexer:
     def _pause_reason(self) -> str:
         if self.manual_pause.is_set():
             return "paused by you"
+        if not getattr(self.embedder, "available", True):
+            return "AI model not downloaded yet - Settings -> AI model"
         wanted = getattr(self.embedder, "wanted", None)
         if wanted is not None and not wanted.is_set():
             return "model unloaded - continues when you next search"
@@ -488,19 +502,22 @@ class SearchService:
         self.indexer = BackgroundIndexer(cfg, self.embedder, watch, initial_scan) if background else None
         self.thumb_dir = cfg.data_dir / "thumbs"
         self.suggestions = FolderSuggestions(cfg)
+        self.model_files = ModelDownloader(cfg, on_done=self._model_downloaded)
         self._config_lock = threading.Lock()
         self.request_exit = lambda: None  # set by serve(): asks the web server to stop
         self.app = self._build_app()
 
     # lifecycle
     def startup(self):
-        self.embedder.warm_up()
+        if self.embedder.available:  # otherwise: Settings -> AI model -> Download, then it loads
+            self.embedder.warm_up()
         if self.indexer:
             self.indexer.start()
 
     def shutdown(self):
         self.embedder.close()  # an indexer waiting for the model gives up
         self.suggestions.close()
+        self.model_files.close()  # an unfinished download resumes next time
         if self.indexer:
             self.indexer.stop()
         with self.db_lock:
@@ -520,6 +537,34 @@ class SearchService:
         return secrets.compare_digest(tok, self.token)
 
     # settings (folders + exclusions), changed live from the app's Settings window
+    def _model_downloaded(self) -> None:
+        """The download finished: use the new files, load the model, let indexing continue."""
+        use_location(self.cfg.model, self.model_files.locate())
+        self.embedder.load()
+
+    def _start_download(self, folder: str | None) -> dict:
+        """Settings -> Download model, optionally into another folder (saved as model.dir)."""
+        if self.model_files.running:
+            return self.model_files.status()
+        if self.model_files.locate().state != "missing":
+            raise ValueError("The AI model is already on this PC.")
+        if folder:
+            folder = os.path.normpath(os.path.expandvars(os.path.expanduser(folder.strip().strip('"'))))
+            if not os.path.isabs(folder):
+                raise ValueError("Choose a full folder path, like D:\\Models.")
+            if not same_path(folder, str(models_folder(self.cfg.model))):
+                if self.cfg.config_path is None:
+                    raise ValueError("This service was started without a settings file")
+                with self._config_lock:
+                    raw = read_raw(self.cfg.config_path)
+                    model = dict(raw.get("model") or {})
+                    model["dir"] = folder
+                    raw["model"] = model
+                    save_raw(self.cfg.config_path, raw)
+                    self.cfg.model.dir = folder
+        self.model_files.start()
+        return self.model_files.status()
+
     def _config_view(self) -> dict:
         cfg = self.cfg
         with self.db_lock:
@@ -576,6 +621,9 @@ class SearchService:
             if q.lstrip().startswith("~"):
                 return {"stage": "fast", "docs": [], "images": [], "ms": 0.0, "skipped": True}
             query = "=" + q.lstrip().lstrip("=")
+        elif not self.embedder.available:
+            # no model yet: file names and exact text only (Settings -> AI model -> Download)
+            query = "=" + q.lstrip().lstrip("=~")
         elif not self.embedder.loaded and not q.lstrip().startswith("="):
             # the model was unloaded: load it before taking the database lock (takes seconds)
             self.embedder.load(wait=True)
@@ -616,6 +664,7 @@ class SearchService:
                     "device": svc.embedder.device_desc,
                     "model": svc.embedder.model_id,
                     "model_state": svc.embedder.model_state,
+                    "device_info": svc.embedder.device_info(),
                     "model_error": svc.embedder.load_error,
                     "setup_needed": not svc.cfg.roots,
                     "folders": list(svc.cfg.roots),
@@ -731,6 +780,22 @@ class SearchService:
 
             return handler
 
+        async def model_get(request: Request):
+            return JSONResponse(
+                {**await run_in_threadpool(svc.model_files.status), "model_state": svc.embedder.model_state}
+            )
+
+        async def model_download(request: Request):
+            body = await _json(request)
+            try:
+                return JSONResponse(await run_in_threadpool(svc._start_download, body.get("folder")))
+            except ValueError as e:
+                return JSONResponse({"error": str(e)}, status_code=400)
+
+        async def model_cancel(request: Request):
+            svc.model_files.cancel()
+            return JSONResponse(await run_in_threadpool(svc.model_files.status))
+
         async def model_unload(request: Request):
             await run_in_threadpool(svc.embedder.unload)
             return JSONResponse({"ok": True, "model_state": svc.embedder.model_state})
@@ -771,6 +836,9 @@ class SearchService:
             Route("/page", page),
             Route("/open", open_, methods=["POST"]),
             Route("/feedback", feedback, methods=["POST"]),
+            Route("/model", model_get),
+            Route("/model/download", model_download, methods=["POST"]),
+            Route("/model/download/cancel", model_cancel, methods=["POST"]),
             Route("/model/unload", model_unload, methods=["POST"]),
             Route("/model/load", model_load, methods=["POST"]),
             Route("/index/pause", _control("pause"), methods=["POST"]),
@@ -1009,9 +1077,13 @@ def serve(
     svc = None
     try:
         svc = SearchService(cfg, embedder, background=background, watch=watch)
-        log(f"Loading {embedder.model_id} ...")
+        if svc.embedder.available:
+            log(f"Loading {embedder.model_id} ...")
+        else:
+            log("The AI model isn't downloaded yet: Settings -> AI model -> Download (indexing waits until then).")
         svc.startup()
-        log(f"Model ready on {svc.embedder.device_desc}")
+        if svc.embedder.available:
+            log(f"Model ready on {svc.embedder.device_desc}")
         info = write_service_file(cfg, host, port, svc.token)
         log(f"Search service on {service_url(host, port)}  (token in {info})")
         if svc.indexer:

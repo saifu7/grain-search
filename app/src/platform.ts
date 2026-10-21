@@ -44,8 +44,11 @@ export function hideWindow(): void {
   tauri()?.core.invoke("hide_window").catch(() => {});
 }
 
-export function setWindowHeight(height: number): void {
-  tauri()?.core.invoke("set_height", { height }).catch(() => {});
+/** Resize the search window. Resolves once Windows has applied the new size (at once in a browser). */
+export async function setWindowHeight(height: number): Promise<void> {
+  await tauri()
+    ?.core.invoke("set_height", { height })
+    .catch(() => {});
 }
 
 /** Called every time the hotkey shows the window. */

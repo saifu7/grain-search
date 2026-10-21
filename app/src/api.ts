@@ -3,6 +3,7 @@ import type {
   ConfigChange,
   ConfigView,
   FolderSuggestion,
+  ModelFiles,
   ModelState,
   Preview,
   SearchPayload,
@@ -109,6 +110,15 @@ export const changeExclude = (svc: ServiceInfo, action: "add" | "remove", value:
 /** Bring the model back after tray -> Unload model (loads in the background; returns at once). */
 export const loadModel = (svc: ServiceInfo) =>
   call<{ ok: boolean; model_state: ModelState }>(svc, "/model/load", { method: "POST" });
+
+// -- the AI model's files (Settings -> AI model) -----------------------------------------
+export const getModel = (svc: ServiceInfo) => call<ModelFiles>(svc, "/model");
+
+export const downloadModel = (svc: ServiceInfo, folder?: string) =>
+  call<ModelFiles>(svc, "/model/download", { method: "POST", body: JSON.stringify(folder ? { folder } : {}) });
+
+export const cancelModelDownload = (svc: ServiceInfo) =>
+  call<ModelFiles>(svc, "/model/download/cancel", { method: "POST" });
 
 export const indexControl = (svc: ServiceInfo, action: "pause" | "resume" | "rescan") =>
   call<{ ok: boolean }>(svc, `/index/${action}`, { method: "POST" });

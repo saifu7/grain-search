@@ -43,6 +43,11 @@ class AppPaths:
         return self.data_dir / "index"
 
     @property
+    def models_dir(self) -> Path:
+        """Default folder for the downloaded AI model (can be changed with `model.dir` in config.json)."""
+        return self.data_dir / "models"
+
+    @property
     def logs_dir(self) -> Path:
         return self.data_dir / "logs"
 

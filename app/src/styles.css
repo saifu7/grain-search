@@ -777,6 +777,108 @@ body:has(.settings-page) {
   font-size: 13px;
   margin: 0;
 }
+.device-card {
+  gap: 6px;
+}
+.device-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.device-note {
+  margin: 0;
+}
+.chip {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  flex: none;
+  color: #fff;
+  background: var(--faint);
+}
+.chip.ok {
+  background: var(--ok);
+}
+.chip.paused {
+  background: var(--paused);
+}
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--divider);
+  margin-top: 4px;
+}
+.tab {
+  appearance: none;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  padding: 8px 12px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tab:hover {
+  color: var(--text);
+}
+.tab.on {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.tab-badge {
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  min-width: 16px;
+  text-align: center;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--paused);
+}
+.tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.progress {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--divider);
+  overflow: hidden;
+}
+.progress > div {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+.progress-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.model-folder {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.model-folder .row-sub {
+  flex: 1;
+  min-width: 0;
+}
 .empty-state {
   color: var(--muted);
   padding: 14px 0;
