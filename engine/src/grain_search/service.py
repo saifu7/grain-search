@@ -54,31 +54,97 @@ GPU_FULL_RETRY_S = 60.0
 # -- shared model ---------------------------------------------------------------------
 class LockedEmbedder:
     """One model, two threads (searches + background indexing): serialise model calls.
-    Indexing encodes one file at a time, so a query waits at most one small batch."""
+    Indexing encodes one file at a time, so a query waits at most one small batch.
+
+    Also owns "should the model be in memory?" (`wanted`). Tray -> Unload model clears it and
+    frees the GPU memory; background indexing then waits (changed files stay queued) until
+    something asks for the model again: Alt+Space (`load`) or a search."""
 
     def __init__(self, inner: Embedder):
         self.inner = inner
         self.lock = threading.Lock()
         self.model_id, self.dim = inner.model_id, inner.dim
+        self.wanted = threading.Event()
+        self.wanted.set()
+        self.closed = False
+        self._loading = False
+        self.load_error = ""
 
     @property
     def device_desc(self) -> str:
         return getattr(self.inner, "device_desc", "?")
 
+    @property
+    def loaded(self) -> bool:
+        return bool(getattr(self.inner, "loaded", True))
+
+    @property
+    def model_state(self) -> str:
+        if self.loaded:
+            return "loaded"
+        if self._loading or (self.wanted.is_set() and self.lock.locked()):
+            return "loading"
+        return "unloaded"
+
     def _call(self, name, *a):
         with self.lock:
             return getattr(self.inner, name)(*a)
 
+    def _wait_until_wanted(self) -> None:
+        """Background indexing only: while the model is unloaded, wait instead of loading it."""
+        while not self.wanted.wait(0.5):
+            if self.closed:
+                raise Stopped()
+
+    # model on / off
+    def unload(self) -> None:
+        self.wanted.clear()
+        with self.lock:  # waits for a running encode to finish, so its memory is freed too
+            if self.wanted.is_set():  # someone asked for the model again meanwhile
+                return
+            unload = getattr(self.inner, "unload", None)
+            if unload is not None:
+                unload()
+
+    def load(self, wait: bool = False) -> None:
+        """Bring the model back: in the background (Alt+Space), or now (`wait`, a search)."""
+        self.wanted.set()
+        if self.loaded:
+            return
+        if wait:
+            self._load_now()
+        elif not self._loading:
+            self._loading = True
+            threading.Thread(target=self._load_now, name="load-model", daemon=True).start()
+
+    def _load_now(self) -> None:
+        self._loading = True
+        try:
+            self._call("warm_up")
+            self.load_error = ""
+        except Exception as e:
+            self.load_error = f"{type(e).__name__}: {e}"[:500]
+        finally:
+            self._loading = False
+
+    def close(self) -> None:
+        self.closed = True
+
+    # model calls
     def warm_up(self):
+        self._wait_until_wanted()
         return self._call("warm_up")
 
     def encode_query(self, text):
+        self.wanted.set()  # a search brings the model back (and lets indexing continue)
         return self._call("encode_query", text)
 
     def encode_documents(self, docs):
+        self._wait_until_wanted()
         return self._call("encode_documents", docs)
 
     def encode_images(self, paths):
+        self._wait_until_wanted()
         return self._call("encode_images", paths)
 
     @property
@@ -145,6 +211,9 @@ class BackgroundIndexer:
     def _pause_reason(self) -> str:
         if self.manual_pause.is_set():
             return "paused by you"
+        wanted = getattr(self.embedder, "wanted", None)
+        if wanted is not None and not wanted.is_set():
+            return "model unloaded - continues when you next search"
         now = time.monotonic()
         if now - self._auto_checked > AUTO_PAUSE_CHECK_S:
             self._auto_checked = now
@@ -270,6 +339,7 @@ class BackgroundIndexer:
     def _full_pass(self, store: Store):
         while not self.stop_flag.is_set():
             try:
+                self.checkpoint()  # e.g. model unloaded: wait here, run_index would load it first
                 rep = run_index(self.cfg, store, self.embedder, checkpoint=self.checkpoint, state=self.state)
                 self.last_report = {"kind": "full", **asdict(rep)}
                 self.state.last_error = ""
@@ -349,6 +419,7 @@ class SearchService:
             self.indexer.start()
 
     def shutdown(self):
+        self.embedder.close()  # an indexer waiting for the model gives up
         if self.indexer:
             self.indexer.stop()
         with self.db_lock:
@@ -423,6 +494,9 @@ class SearchService:
             if q.lstrip().startswith("~"):
                 return {"stage": "fast", "docs": [], "images": [], "ms": 0.0, "skipped": True}
             query = "=" + q.lstrip().lstrip("=")
+        elif not self.embedder.loaded and not q.lstrip().startswith("="):
+            # the model was unloaded: load it before taking the database lock (takes seconds)
+            self.embedder.load(wait=True)
         with self.db_lock:
             res: Results = self.searcher.search(query, limit=limit)
             b = ranking.boosts(self.store, [d.path for d in res.docs], q)
@@ -459,6 +533,8 @@ class SearchService:
                     "uptime_s": round(time.time() - svc.started),
                     "device": svc.embedder.device_desc,
                     "model": svc.embedder.model_id,
+                    "model_state": svc.embedder.model_state,
+                    "model_error": svc.embedder.load_error,
                     "setup_needed": not svc.cfg.roots,
                     "folders": list(svc.cfg.roots),
                     "config_file": str(svc.cfg.config_path) if svc.cfg.config_path else None,
@@ -573,6 +649,14 @@ class SearchService:
 
             return handler
 
+        async def model_unload(request: Request):
+            await run_in_threadpool(svc.embedder.unload)
+            return JSONResponse({"ok": True, "model_state": svc.embedder.model_state})
+
+        async def model_load(request: Request):
+            svc.embedder.load()
+            return JSONResponse({"ok": True, "model_state": svc.embedder.model_state})
+
         async def shutdown(request: Request):
             svc.request_exit()
             return JSONResponse({"ok": True})
@@ -602,6 +686,8 @@ class SearchService:
             Route("/page", page),
             Route("/open", open_, methods=["POST"]),
             Route("/feedback", feedback, methods=["POST"]),
+            Route("/model/unload", model_unload, methods=["POST"]),
+            Route("/model/load", model_load, methods=["POST"]),
             Route("/index/pause", _control("pause"), methods=["POST"]),
             Route("/index/resume", _control("resume"), methods=["POST"]),
             Route("/index/rescan", _control("rescan"), methods=["POST"]),

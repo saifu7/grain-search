@@ -25,6 +25,10 @@ index format; the app migrates or rebuilds automatically and the notes say so.
   each folder has indexed, pause/resume and re-scan. Changes apply immediately, no restart; it
   opens by itself on first run when no folders are set up.
 - Engine API for the Settings window: `GET /config`, `POST /config/folders`, `POST /config/excludes`.
+- Tray → **Unload model** frees the AI model's GPU memory (~0.9 GB) and **Stop engine** stops the
+  search engine entirely (all of it); the next Alt+Space brings back whichever you unloaded.
+  While the model is unloaded, changed files wait and are indexed once it is back. Engine API:
+  `POST /model/unload`, `POST /model/load`, and `model_state` in `/status`.
 - New Grain Search logo: a lowercase "g" with a golden grain in its bowl. App, tray and installer
   icons are generated from `docs/assets/logo.svg`.
 

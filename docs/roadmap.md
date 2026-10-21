@@ -22,7 +22,8 @@ checksums and build attestations, Dependabot, CodeQL.
 - Settings in `config.json`. **No folders indexed until the user picks them.**
 - ✅ Nothing machine-specific compiled in (engine folder and uv found at run time); free port chosen at start.
 - ✅ The service always stops with the app (Windows job object, plus the engine watching the app).
-- The model unloads from the GPU when idle.
+- ✅ Free the GPU by hand: tray → Unload model / Stop engine; Alt+Space brings it back.
+  (Automatic unload after idle minutes: not now.)
 - Crash restart with back-off; rotating logs; "Open logs" in the tray.
 
 ### Phase 2: Settings window and first-run wizard

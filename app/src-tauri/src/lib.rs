@@ -702,6 +702,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let pause = MenuItem::with_id(app, "pause", "Pause indexing", true, None::<&str>)?;
     let resume = MenuItem::with_id(app, "resume", "Resume indexing", true, None::<&str>)?;
     let rescan = MenuItem::with_id(app, "rescan", "Re-scan all folders", true, None::<&str>)?;
+    // Free GPU memory by hand; Alt+Space brings back whichever was unloaded.
+    let unload = MenuItem::with_id(app, "unload", "Unload model", true, None::<&str>)?;
+    let stop = MenuItem::with_id(app, "stop", "Stop engine", true, None::<&str>)?;
     let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
     let autostart = CheckMenuItem::with_id(
         app,
@@ -715,10 +718,12 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let s1 = PredefinedMenuItem::separator(app)?;
     let s2 = PredefinedMenuItem::separator(app)?;
     let s3 = PredefinedMenuItem::separator(app)?;
+    let s4 = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
         &[
-            &open, &settings, &s1, &pause, &resume, &rescan, &s2, &autostart, &s3, &quit,
+            &open, &settings, &s1, &pause, &resume, &rescan, &s2, &unload, &stop, &s3, &autostart,
+            &s4, &quit,
         ],
     )?;
 
@@ -734,6 +739,15 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             "pause" => service_post(app, "/index/pause"),
             "resume" => service_post(app, "/index/resume"),
             "rescan" => service_post(app, "/index/rescan"),
+            // both can take a few seconds: keep the tray responsive
+            "unload" => {
+                let app = app.clone();
+                std::thread::spawn(move || service_post(&app, "/model/unload"));
+            }
+            "stop" => {
+                let app = app.clone();
+                std::thread::spawn(move || stop_service(&app));
+            }
             "autostart" => {
                 let al = app.autolaunch();
                 let _ = if al.is_enabled().unwrap_or(false) {

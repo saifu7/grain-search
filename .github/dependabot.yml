@@ -2,7 +2,7 @@ version: 2
 updates:
   - package-ecosystem: uv
     directory: /engine
-    schedule: { interval: weekly }
+    schedule: { interval: monthly }
     groups:
       python: { patterns: ["*"], update-types: ["minor", "patch"] }
     ignore:
@@ -11,14 +11,14 @@ updates:
       - dependency-name: "torchvision"
   - package-ecosystem: npm
     directory: /app
-    schedule: { interval: weekly }
+    schedule: { interval: monthly }
     groups:
       npm: { patterns: ["*"], update-types: ["minor", "patch"] }
   - package-ecosystem: cargo
     directory: /app/src-tauri
-    schedule: { interval: weekly }
+    schedule: { interval: monthly }
     groups:
       cargo: { patterns: ["*"], update-types: ["minor", "patch"] }
   - package-ecosystem: github-actions
     directory: /
-    schedule: { interval: weekly }
+    schedule: { interval: monthly }

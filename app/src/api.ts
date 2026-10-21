@@ -1,5 +1,5 @@
 // Talks to `grain serve` (127.0.0.1 only, bearer token).
-import type { ConfigChange, ConfigView, Preview, SearchPayload, ServiceInfo, Status } from "./types";
+import type { ConfigChange, ConfigView, ModelState, Preview, SearchPayload, ServiceInfo, Status } from "./types";
 
 const enc = encodeURIComponent;
 
@@ -93,6 +93,10 @@ export const changeFolder = (svc: ServiceInfo, action: "add" | "remove", path: s
 
 export const changeExclude = (svc: ServiceInfo, action: "add" | "remove", value: string) =>
   call<ConfigChange>(svc, "/config/excludes", { method: "POST", body: JSON.stringify({ action, value }) });
+
+/** Bring the model back after tray -> Unload model (loads in the background; returns at once). */
+export const loadModel = (svc: ServiceInfo) =>
+  call<{ ok: boolean; model_state: ModelState }>(svc, "/model/load", { method: "POST" });
 
 export const indexControl = (svc: ServiceInfo, action: "pause" | "resume" | "rescan") =>
   call<{ ok: boolean }>(svc, `/index/${action}`, { method: "POST" });
