@@ -2,8 +2,8 @@
 // Every change is sent to the search service, which saves config.json and applies it live.
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "./api";
-import { ensureService, inTauri, pickFolder } from "./platform";
-import type { ConfigView, ServiceInfo, Status } from "./types";
+import { ensureService, getSettings, inTauri, pickFolder, setHotkey } from "./platform";
+import type { ConfigChange, ConfigView, FolderSuggestion, ServiceInfo, Status } from "./types";
 
 type Note = { kind: "ok" | "error"; text: string } | null;
 
@@ -14,6 +14,8 @@ export default function Settings() {
   const [status, setStatus] = useState<Status | null>(null);
   const [note, setNote] = useState<Note>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<FolderSuggestion[]>([]);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
   const noteTimer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
@@ -27,16 +29,21 @@ export default function Settings() {
     if (!svc) return;
     api.getConfig(svc).then(setConfig).catch(() => {});
     api.status(svc).then(setStatus).catch(() => {});
+    api
+      .getSuggestions(svc)
+      .then((r) => setSuggestions(r.suggestions))
+      .catch(() => {});
   }, [svc]);
 
   // fast refresh while indexing (counts move), slow when idle
   const indexing = status?.indexer?.phase === "indexing" || status?.indexer?.phase === "scanning";
+  const counting = suggestions.some((s) => s.counting);
   useEffect(() => {
     if (!svc) return;
     refresh();
-    const t = window.setInterval(refresh, indexing ? 1500 : 4000);
+    const t = window.setInterval(refresh, indexing || counting ? 1500 : 4000);
     return () => window.clearInterval(t);
-  }, [svc, refresh, indexing]);
+  }, [svc, refresh, indexing, counting]);
 
   const show = (n: Note) => {
     setNote(n);
@@ -62,6 +69,26 @@ export default function Settings() {
   const removeFolder = (path: string) => svc && run(`rm:${path}`, () => api.changeFolder(svc, "remove", path));
   const addExclude = (value: string) => svc && run("add-exclude", () => api.changeExclude(svc, "add", value));
   const removeExclude = (value: string) => svc && run(`rx:${value}`, () => api.changeExclude(svc, "remove", value));
+
+  const togglePicked = (path: string) =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+
+  // add the ticked suggestions one by one, exactly like the Add button does
+  const addSuggested = () => {
+    const paths = suggestions.filter((s) => picked.has(s.path)).map((s) => s.path);
+    if (!svc || paths.length === 0) return;
+    run("add-suggested", async () => {
+      let last: ConfigChange | undefined;
+      for (const p of paths) last = await api.changeFolder(svc, "add", p);
+      setPicked(new Set());
+      return { ...last, message: `Added ${plural(paths.length, "folder")}` };
+    });
+  };
 
   async function browse(kind: "folder" | "exclude") {
     const chosen = await pickFolder(kind === "folder" ? "Choose a folder to search" : "Choose a folder to skip");
@@ -104,6 +131,15 @@ export default function Settings() {
             </button>
           )}
         </div>
+        {suggestions.length > 0 && (
+          <SuggestedFolders
+            items={suggestions}
+            picked={picked}
+            busy={busy === "add-suggested"}
+            onToggle={togglePicked}
+            onAdd={addSuggested}
+          />
+        )}
         {config.folders.length === 0 ? (
           <p className="empty-state">No folders yet. Add the folders you want to search, such as Documents or Pictures.</p>
         ) : (
@@ -131,6 +167,8 @@ export default function Settings() {
           onSubmit={addFolder}
         />
       </section>
+
+      {inTauri() && <HotkeyCard />}
 
       <section className="card" aria-labelledby="skip-h">
         <div className="card-head">
@@ -204,6 +242,199 @@ function ExcludeList({
       )}
     </div>
   );
+}
+
+function SuggestedFolders({
+  items,
+  picked,
+  busy,
+  onToggle,
+  onAdd,
+}: {
+  items: FolderSuggestion[];
+  picked: Set<string>;
+  busy: boolean;
+  onToggle: (path: string) => void;
+  onAdd: () => void;
+}) {
+  const chosen = items.filter((s) => picked.has(s.path)).length;
+  return (
+    <div className="suggest" aria-labelledby="suggest-h">
+      <div className="suggest-head">
+        <span id="suggest-h" className="suggest-title">Suggested folders</span>
+        <button className="btn primary" disabled={busy || chosen === 0} onClick={onAdd}>
+          {chosen > 1 ? `Add ${chosen} folders` : "Add selected"}
+        </button>
+      </div>
+      <ul className="rows compact">
+        {items.map((s) => (
+          <li key={s.path} className="row">
+            <label className="suggest-row">
+              <input type="checkbox" checked={picked.has(s.path)} onChange={() => onToggle(s.path)} />
+              <FolderIcon />
+              <span className="row-main">
+                <span className="row-title">{s.label}</span>
+                <span className="row-sub" title={s.path}>{s.path}</span>
+              </span>
+              <span className="row-meta">
+                {s.files === null || s.bytes === null
+                  ? "Counting…"
+                  : `${plural(s.files, "file")} · ${formatBytes(s.bytes)}`}
+              </span>
+            </label>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+const DEFAULT_HOTKEY = "Alt+Space";
+
+/** KeyboardEvent.code -> the key name the app accepts (letters, digits, Space, F1-F12). */
+function keyName(code: string): string | null {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  if (code === "Space") return "Space";
+  if (/^F([1-9]|1[0-2])$/.test(code)) return code;
+  return null;
+}
+
+function Keys({ combo }: { combo: string }) {
+  return (
+    <span className="keycaps">
+      {combo.split("+").map((k, i) => (
+        <kbd key={i}>{k}</kbd>
+      ))}
+    </span>
+  );
+}
+
+/** Settings -> Keyboard shortcut: shows the shortcut, records a new one, applies it at once.
+ *  If another program already owns it, the old shortcut keeps working and the box turns red. */
+function HotkeyCard() {
+  const [hotkey, setHk] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState<string | null>(null); // the shortcut that didn't work
+  const [problem, setProblem] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [held, setHeld] = useState(""); // modifiers held so far while recording
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    getSettings()
+      .then((s) => {
+        setHk(s.hotkey);
+        if (s.hotkey_error) setProblem(s.hotkey_error); // couldn't get it when the app started
+      })
+      .catch(() => {});
+  }, []);
+
+  const apply = useCallback(async (combo: string) => {
+    setBusy(true);
+    setAttempt(combo);
+    setDone(null);
+    try {
+      const now = await setHotkey(combo);
+      setHk(now);
+      setAttempt(null);
+      setProblem(null);
+      setDone(`Shortcut changed to ${now}.`);
+    } catch (e) {
+      setProblem(String((e as Error)?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!recording) return;
+    const down = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift"].filter(Boolean) as string[];
+      if (e.key === "Escape" && mods.length === 0) {
+        setRecording(false);
+        setHeld("");
+        return;
+      }
+      if (e.metaKey) {
+        setProblem("The Windows key can't be used in the shortcut.");
+        return;
+      }
+      const key = keyName(e.code);
+      if (!key) {
+        setHeld(mods.join("+")); // only modifiers so far (or a key we don't allow)
+        return;
+      }
+      if (mods.length === 0) {
+        setAttempt(key);
+        setProblem("Use at least one of Ctrl, Alt or Shift.");
+        return;
+      }
+      setRecording(false);
+      setHeld("");
+      apply([...mods, key].join("+"));
+    };
+    window.addEventListener("keydown", down, true);
+    return () => window.removeEventListener("keydown", down, true);
+  }, [recording, apply]);
+
+  const start = () => {
+    setRecording(true);
+    setHeld("");
+    setAttempt(null);
+    setProblem(null);
+    setDone(null);
+  };
+
+  return (
+    <section className="card" aria-labelledby="hotkey-h">
+      <div className="card-head">
+        <h2 id="hotkey-h">Keyboard shortcut</h2>
+        <span className="status-actions">
+          {recording ? (
+            <button className="btn" onClick={() => setRecording(false)}>Cancel</button>
+          ) : (
+            <button className="btn" disabled={busy || !hotkey} onClick={start}>Change</button>
+          )}
+          {hotkey && hotkey !== DEFAULT_HOTKEY && !recording && (
+            <button className="btn" disabled={busy} onClick={() => apply(DEFAULT_HOTKEY)}>
+              Reset to {DEFAULT_HOTKEY}
+            </button>
+          )}
+        </span>
+      </div>
+      <p className="muted small">Press it anywhere in Windows to open the search.</p>
+      <div className={"hotkey-box" + (recording ? " rec" : problem ? " bad" : "")} aria-live="polite">
+        {recording ? (
+          held ? (
+            <Keys combo={held + "+…"} />
+          ) : (
+            <span className="muted">Press the new shortcut… (Esc to cancel)</span>
+          )
+        ) : (
+          <Keys combo={attempt ?? hotkey ?? "…"} />
+        )}
+      </div>
+      {problem && !recording && (
+        <p className="hotkey-problem" role="alert">
+          {problem}
+        </p>
+      )}
+      {done && !problem && <p className="muted small">{done}</p>}
+    </section>
+  );
+}
+
+function formatBytes(n: number): string {
+  const units = ["bytes", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  return i === 0 ? `${n} ${units[0]}` : `${n.toFixed(n < 10 ? 1 : 0)} ${units[i]}`;
 }
 
 function Page({ children }: { children: React.ReactNode }) {

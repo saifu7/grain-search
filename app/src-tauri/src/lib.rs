@@ -106,7 +106,7 @@ struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            hotkey: "Alt+Space".into(),
+            hotkey: DEFAULT_HOTKEY.into(),
             glass: false,
             engine_dir: None,
             uv: None,
@@ -201,7 +201,12 @@ struct AppState {
     settings: Settings,
     dirs: AppDirs,
     child: Arc<Mutex<Option<Child>>>,
+    /// The shortcut in use now (starts as settings.hotkey; Settings can change it live).
+    hotkey: Mutex<String>,
+    /// Why the shortcut doesn't work, when Windows refused it (another program owns it).
     hotkey_error: Mutex<Option<String>>,
+    /// The tray's "Open Grain Search (<hotkey>)" item, to update its text after a change.
+    open_item: Mutex<Option<MenuItem<tauri::Wry>>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -683,14 +688,140 @@ async fn pick_folder(app: AppHandle, title: Option<String>) -> Result<Option<Str
 fn get_settings(state: tauri::State<'_, AppState>) -> UiSettings {
     UiSettings {
         glass: state.settings.glass,
-        hotkey: state.settings.hotkey.clone(),
+        hotkey: state.hotkey.lock().unwrap().clone(),
         hotkey_error: state.hotkey_error.lock().unwrap().clone(),
     }
 }
 
+// -- keyboard shortcut ----------------------------------------------------------------------
+const DEFAULT_HOTKEY: &str = "Alt+Space";
+
+/// Checks a shortcut typed or recorded in Settings and writes it the one standard way
+/// ("Ctrl+Alt+Shift+K"). At least one of Ctrl/Alt/Shift is required (a bare key would take over
+/// normal typing everywhere); the Windows key is not allowed (Windows reserves most Win+ combos).
+fn check_hotkey(text: &str) -> Result<String, String> {
+    let (mut ctrl, mut alt, mut shift) = (false, false, false);
+    let mut key: Option<String> = None;
+    for part in text.split('+').map(str::trim).filter(|p| !p.is_empty()) {
+        match part.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => ctrl = true,
+            "alt" => alt = true,
+            "shift" => shift = true,
+            "win" | "super" | "meta" | "cmd" | "command" => {
+                return Err("The Windows key can't be used in the shortcut.".into())
+            }
+            k => {
+                if key.is_some() {
+                    return Err("Use one key plus Ctrl, Alt or Shift.".into());
+                }
+                let normal = if k == "space" {
+                    "Space".to_string()
+                } else if k.len() == 1 && k.chars().all(|c| c.is_ascii_alphanumeric()) {
+                    k.to_ascii_uppercase()
+                } else if let Some(n) = k.strip_prefix('f').and_then(|n| n.parse::<u8>().ok()) {
+                    if !(1..=12).contains(&n) {
+                        return Err(format!("{part} can't be used; pick F1 to F12."));
+                    }
+                    format!("F{n}")
+                } else {
+                    return Err(format!(
+                        "{part} can't be used; pick a letter, a digit, Space or F1 to F12."
+                    ));
+                };
+                key = Some(normal);
+            }
+        }
+    }
+    let key = key.ok_or("Add a key to Ctrl, Alt or Shift, for example Ctrl+Space.")?;
+    if !(ctrl || alt || shift) {
+        return Err("Use at least one of Ctrl, Alt or Shift.".into());
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    if ctrl {
+        parts.push("Ctrl");
+    }
+    if alt {
+        parts.push("Alt");
+    }
+    if shift {
+        parts.push("Shift");
+    }
+    parts.push(&key);
+    Ok(parts.join("+"))
+}
+
+/// Writes the shortcut into settings.json, keeping every other setting in the file as it is.
+fn save_hotkey(file: &Path, hotkey: &str) -> Result<(), String> {
+    let mut obj = match fs::read_to_string(file) {
+        Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(serde_json::Value::Object(map)) => map,
+            _ => {
+                return Err(format!(
+                    "{} isn't valid JSON; fix or delete it.",
+                    file.display()
+                ))
+            }
+        },
+        Err(_) => serde_json::Map::new(), // no file yet
+    };
+    obj.insert("hotkey".into(), serde_json::Value::String(hotkey.into()));
+    if let Some(dir) = file.parent() {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let text =
+        serde_json::to_string_pretty(&serde_json::Value::Object(obj)).map_err(|e| e.to_string())?;
+    let tmp = file.with_extension("json.tmp");
+    fs::write(&tmp, text + "\n").map_err(|e| e.to_string())?;
+    fs::rename(&tmp, file).map_err(|e| e.to_string())
+}
+
+fn taken_message(hotkey: &str) -> String {
+    format!("{hotkey} is already used by another program, so it won't respond.")
+}
+
+/// Settings -> Keyboard shortcut. Tries the new shortcut first; only if Windows accepts it is the
+/// old one released and the new one saved. If another program owns it, nothing changes.
+/// Async on purpose: the shortcut library registers on the main thread, and a plain (sync)
+/// command runs on the main thread itself, which would freeze the app.
+#[tauri::command]
+async fn set_hotkey(app: AppHandle, hotkey: String) -> Result<String, String> {
+    let wanted = check_hotkey(&hotkey)?;
+    let state = app.state::<AppState>();
+    let current = state.hotkey.lock().unwrap().clone();
+    let current_works = state.hotkey_error.lock().unwrap().is_none();
+    if wanted.eq_ignore_ascii_case(&current) && current_works {
+        return Ok(current);
+    }
+    let shortcuts = app.global_shortcut();
+    if let Err(e) = shortcuts.register(wanted.as_str()) {
+        eprintln!("register {wanted}: {e}");
+        let keep = if current_works {
+            format!(" Your shortcut stays {current}.")
+        } else {
+            String::new()
+        };
+        return Err(taken_message(&wanted) + &keep);
+    }
+    if current_works && !wanted.eq_ignore_ascii_case(&current) {
+        let _ = shortcuts.unregister(current.as_str());
+    }
+    *state.hotkey.lock().unwrap() = wanted.clone();
+    *state.hotkey_error.lock().unwrap() = None;
+    if let Err(e) = save_hotkey(&state.dirs.config.join("settings.json"), &wanted) {
+        eprintln!("Could not save the shortcut: {e}"); // works for now; back to the old one after a restart
+    }
+    if let Some(item) = state.open_item.lock().unwrap().as_ref() {
+        let _ = item.set_text(format!("Open Grain Search ({wanted})"));
+    }
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_tooltip(Some(format!("Grain Search ({wanted})")));
+    }
+    Ok(wanted)
+}
+
 // -- tray ------------------------------------------------------------------------------------
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
-    let hotkey = app.state::<AppState>().settings.hotkey.clone();
+    let hotkey = app.state::<AppState>().hotkey.lock().unwrap().clone();
     let open = MenuItem::with_id(
         app,
         "open",
@@ -698,6 +829,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         true,
         None::<&str>,
     )?;
+    *app.state::<AppState>().open_item.lock().unwrap() = Some(open.clone());
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let pause = MenuItem::with_id(app, "pause", "Pause indexing", true, None::<&str>)?;
     let resume = MenuItem::with_id(app, "resume", "Resume indexing", true, None::<&str>)?;
@@ -809,11 +941,15 @@ pub fn run() {
                 settings: settings.clone(),
                 dirs,
                 child: Arc::new(Mutex::new(None)),
+                hotkey: Mutex::new(settings.hotkey.clone()),
                 hotkey_error: Mutex::new(None),
+                open_item: Mutex::new(None),
             });
 
             if let Err(e) = handle.global_shortcut().register(settings.hotkey.as_str()) {
-                *handle.state::<AppState>().hotkey_error.lock().unwrap() = Some(e.to_string());
+                eprintln!("register {}: {e}", settings.hotkey);
+                *handle.state::<AppState>().hotkey_error.lock().unwrap() =
+                    Some(taken_message(&settings.hotkey));
             }
 
             if let Some(w) = handle.get_webview_window("main") {
@@ -855,7 +991,8 @@ pub fn run() {
             hide_window,
             open_settings,
             pick_folder,
-            set_height
+            set_height,
+            set_hotkey
         ])
         .run(tauri::generate_context!())
         .expect("error while running Grain Search");
@@ -886,6 +1023,64 @@ mod tests {
         // the old name still works
         let old: Settings = serde_json::from_str(r#"{"project_dir": "D:/x/engine"}"#).unwrap();
         assert_eq!(old.engine_dir.as_deref(), Some("D:/x/engine"));
+    }
+
+    #[test]
+    fn hotkey_is_checked_and_written_one_way() {
+        assert_eq!(check_hotkey("alt+space").unwrap(), "Alt+Space");
+        assert_eq!(check_hotkey(" shift + ctrl + k ").unwrap(), "Ctrl+Shift+K");
+        assert_eq!(check_hotkey("Control+Alt+f5").unwrap(), "Ctrl+Alt+F5");
+        assert_eq!(check_hotkey("Ctrl+1").unwrap(), "Ctrl+1");
+        assert_eq!(check_hotkey(DEFAULT_HOTKEY).unwrap(), DEFAULT_HOTKEY);
+    }
+
+    #[test]
+    fn hotkey_rules() {
+        let err = |s: &str| check_hotkey(s).unwrap_err();
+        assert!(
+            err("K").contains("Ctrl, Alt or Shift"),
+            "a bare key would steal typing"
+        );
+        assert!(err("Win+K").contains("Windows key"));
+        assert!(err("Ctrl+Alt").contains("Add a key"));
+        assert!(err("Ctrl+K+J").contains("one key"));
+        assert!(err("Ctrl+F13").contains("F1 to F12"));
+        assert!(err("Ctrl+Enter").contains("can't be used"));
+        assert!(err("").contains("Add a key"));
+    }
+
+    #[test]
+    fn saving_the_hotkey_keeps_other_settings() {
+        let t = TempTree::new("hotkey");
+        let file = t.0.join("GrainSearch").join("settings.json");
+        save_hotkey(&file, "Ctrl+Space").unwrap(); // no file yet: created
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(v["hotkey"], "Ctrl+Space");
+
+        fs::write(
+            &file,
+            r#"{"engine_dir": "D:/x/engine", "glass": true, "hotkey": "Alt+Space"}"#,
+        )
+        .unwrap();
+        save_hotkey(&file, "Ctrl+Shift+K").unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(v["hotkey"], "Ctrl+Shift+K");
+        assert_eq!(v["engine_dir"], "D:/x/engine");
+        assert_eq!(v["glass"], true);
+        let s: Settings = serde_json::from_value(v).unwrap(); // still readable by load_settings
+        assert_eq!(s.hotkey, "Ctrl+Shift+K");
+
+        fs::write(&file, "{ not json").unwrap();
+        assert!(save_hotkey(&file, "Ctrl+K")
+            .unwrap_err()
+            .contains("valid JSON"));
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "{ not json",
+            "a broken file is never overwritten"
+        );
     }
 
     /// A temporary folder tree; removed when dropped.

@@ -25,6 +25,13 @@ index format; the app migrates or rebuilds automatically and the notes say so.
   each folder has indexed, pause/resume and re-scan. Changes apply immediately, no restart; it
   opens by itself on first run when no folders are set up.
 - Engine API for the Settings window: `GET /config`, `POST /config/folders`, `POST /config/excludes`.
+- Settings suggests **Documents, Pictures, Desktop and Downloads** (their real locations, also when
+  OneDrive or you moved them) with how many files and how much data Grain Search would index in
+  each; tick the ones you want and add them in one go. Engine API: `GET /config/suggestions`.
+- Settings → **Keyboard shortcut**: see the shortcut that opens the search (Alt+Space by default),
+  change it by pressing the new keys, or reset it. It applies at once, no restart. If another
+  program already uses the new shortcut, the box turns red, says so, and the old one keeps working;
+  the same warning shows when the app couldn't get its shortcut at start-up.
 - Tray → **Unload model** frees the AI model's GPU memory (~0.9 GB) and **Stop engine** stops the
   search engine entirely (all of it); the next Alt+Space brings back whichever you unloaded.
   While the model is unloaded, changed files wait and are indexed once it is back. Engine API:

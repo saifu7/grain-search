@@ -35,6 +35,12 @@ checksums and build attestations, Dependabot, CodeQL.
 - Changes apply live. Removing a folder removes its files from the index at once.
 - ✅ Done early: the Settings window with folders, exclusions, indexing status, pause/resume and
   re-scan, applied live, and opened automatically on first run.
+- ✅ Suggested folders (Documents, Pictures, Desktop, Downloads) with file counts and sizes, to tick
+  and add.
+- ✅ Keyboard shortcut section: change it live, red warning when another program owns it.
+- Decided (first run): no separate wizard; Settings is the first-run screen. A **Download model**
+  button (user picks the folder), no scanning before the model is there, GPU/CPU shown, hotkey
+  section in Settings. The runtime (Python + PyTorch) is downloaded by the installer (Phase 4).
 
 ### Phase 3: Smooth search window
 Rows that don't jump (stable merge of fast and full results), selection follows the file, preview

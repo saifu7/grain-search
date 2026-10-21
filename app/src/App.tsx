@@ -71,6 +71,7 @@ export default function App() {
           setResult(null);
         }
         lastActive.current = Date.now();
+        getSettings().then(setSettings).catch(() => {}); // the shortcut may have changed in Settings
         requestAnimationFrame(() => {
           input.current?.focus();
           input.current?.select();
