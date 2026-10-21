@@ -47,6 +47,11 @@ class ModelCfg:
     images: bool = True  # load the vision encoder and index pictures
     gpu_memory_fraction: float = 0.5  # never use more than this share of GPU memory (games need the rest)
     max_seq_tokens: int = 1024  # longest text piece the model sees at once (chunks are ~350 tokens)
+    dir: str | None = None  # folder the model is downloaded into (None = %LOCALAPPDATA%\GrainSearch\models)
+    # Set at run time by model_files.locate(): where to load the model from, and whether loading may
+    # download it. The app never downloads silently: the user clicks "Download model" in Settings.
+    source: str | None = None
+    local_only: bool = False
 
 
 @dataclass
@@ -85,8 +90,9 @@ class Config:
 
     @property
     def own_excludes(self) -> list[str]:
-        """The app's own index folder: never indexed, whatever the user's settings say."""
-        return [str(self.data_dir).rstrip("\\/").replace("[", "[[]") + os.sep + "*"]
+        """The app's own folders (index, AI model files): never indexed, whatever the user's settings say."""
+        own = [self.data_dir, app_paths().models_dir] + ([Path(self.model.dir)] if self.model.dir else [])
+        return [str(p).rstrip("\\/").replace("[", "[[]") + os.sep + "*" for p in own]
 
 
 _PCT_VAR = re.compile(r"%([^%]+)%")
@@ -181,6 +187,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         images="image" in (m.get("modalities") or ["text", "image"]),
         gpu_memory_fraction=float(m.get("gpu_memory_fraction", 0.5)),
         max_seq_tokens=int(m.get("max_seq_tokens", 1024)),
+        dir=expand(m["dir"]) if m.get("dir") else None,
     )
     if cfg.model.dim not in (768, 512, 256, 128):
         raise ValueError("model.dim must be 768, 512, 256 or 128")

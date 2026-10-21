@@ -69,6 +69,24 @@ def _doc_prompt(title: str, text: str) -> str:
     return f"title: {title} | text: {text}"
 
 
+def cpu_reason(device_setting: str, torch_cuda_build: bool, nvidia_present: bool) -> str:
+    """Why the model runs on the CPU, in words for the Settings window."""
+    if device_setting == "cpu":
+        return "Set to CPU in the settings (model.device)."
+    if not torch_cuda_build:
+        if nvidia_present:
+            return "This PC has an NVIDIA GPU, but the CPU-only build of PyTorch is installed."
+        return "The CPU-only build of PyTorch is installed."
+    return "No NVIDIA GPU found (or its driver is missing or too old)."
+
+
+def _nvidia_present() -> bool:
+    """An NVIDIA driver is installed (it ships nvidia-smi), without needing PyTorch's CUDA build."""
+    import shutil
+
+    return shutil.which("nvidia-smi") is not None
+
+
 class GemmaEmbedder:
     """The real thing. Loads lazily so `grain status` etc. stay instant."""
 
@@ -80,6 +98,7 @@ class GemmaEmbedder:
         self._load_error: Exception | None = None
         self.image_errors: dict[str, str] = {}
         self.device_desc = "not loaded"
+        self._device: dict = {}  # filled in when the model loads: see device_info()
 
     # -- loading ---------------------------------------------------------------
     def _load(self):
@@ -87,6 +106,11 @@ class GemmaEmbedder:
             return self._model
         if self._load_error is not None:  # never retry a failed load per file
             raise self._load_error
+        if self.cfg.local_only and not self.cfg.source:
+            from .model_files import ModelMissing
+
+            # not remembered as a failure: it works as soon as the download has finished
+            raise ModelMissing("The AI model isn't downloaded yet: open Settings -> AI model -> Download.")
         try:
             return self._load_inner()
         except Exception as e:
@@ -118,7 +142,8 @@ class GemmaEmbedder:
             config_kwargs["vision_config"] = None
 
         self._model = SentenceTransformer(
-            self.cfg.id,
+            self.cfg.source or self.cfg.id,
+            local_files_only=self.cfg.local_only,  # the app never downloads behind your back
             device=device,
             model_kwargs={"dtype": dtype},
             config_kwargs=config_kwargs,
@@ -138,6 +163,16 @@ class GemmaEmbedder:
         self.device_desc = f"{device} / {str(dtype).replace('torch.', '')}"
         if device == "cpu" and getattr(torch.version, "cuda", None) is None:
             self.device_desc += " (CPU-only PyTorch installed: run `uv sync` to get the GPU build)"
+        if device == "cuda":
+            try:
+                name = torch.cuda.get_device_name(0)
+            except Exception:
+                name = "NVIDIA GPU"
+            self._device = {"kind": "gpu", "name": name}
+        else:
+            cuda_build = getattr(torch.version, "cuda", None) is not None
+            reason = cpu_reason(self.cfg.device, cuda_build, _nvidia_present())
+            self._device = {"kind": "cpu", "name": "CPU", "reason": reason}
         return self._model
 
     def _encode(self, inputs, batch_size: int, **kw) -> np.ndarray:
@@ -166,6 +201,26 @@ class GemmaEmbedder:
     @property
     def loaded(self) -> bool:
         return self._model is not None
+
+    @property
+    def available(self) -> bool:
+        """The model's files are on this PC (or this embedder may download them itself)."""
+        return bool(self.cfg.source) or not self.cfg.local_only
+
+    def device_info(self) -> dict:
+        """Where the model runs, for Settings: {kind: gpu|cpu, name, memory_mb?, reason?}.
+        Empty until the model has loaded (and after it was unloaded)."""
+        if self._model is None or not self._device:
+            return {}
+        info = dict(self._device)
+        if info["kind"] == "gpu":
+            try:
+                import torch
+
+                info["memory_mb"] = round(torch.cuda.memory_allocated() / 2**20)
+            except Exception:
+                pass
+        return info
 
     def unload(self) -> None:
         """Drop the model and give its GPU memory back (~0.9 GB). The CUDA context stays until
@@ -248,14 +303,22 @@ class HashEmbedder:
         self.image_errors: dict[str, str] = {}
         self.loaded = False
         self.loads = 0  # how often the "model" was loaded (tests)
+        self.available = True  # tests can pretend the model isn't downloaded
 
     def _ensure_loaded(self) -> None:  # behaves like the real model's lazy loading
+        if not self.available:
+            from .model_files import ModelMissing
+
+            raise ModelMissing("The AI model isn't downloaded yet.")
         if not self.loaded:
             self.loaded = True
             self.loads += 1
 
     def unload(self) -> None:
         self.loaded = False
+
+    def device_info(self) -> dict:
+        return {"kind": "cpu", "name": "Test model", "reason": "Fake model for tests."} if self.loaded else {}
 
     def warm_up(self) -> None:
         self._ensure_loaded()

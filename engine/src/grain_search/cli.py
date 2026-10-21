@@ -52,6 +52,10 @@ def _open_store(cfg: Config, fake: bool):
 def _embedder(cfg: Config, fake: bool):
     from .embedder import make_embedder
 
+    if not fake:  # load the model from the downloaded files only; never download silently
+        from .model_files import locate, use_location
+
+        use_location(cfg.model, locate(cfg.model))
     return make_embedder(cfg.model, fake=fake)
 
 
@@ -371,6 +375,30 @@ def cmd_exclude(args, cfg: Config) -> int:
     return _change(args, cfg, args.items, change_excludes, "folder or pattern")
 
 
+def cmd_model(args, cfg: Config) -> int:
+    from .model_files import DownloadError, download, locate
+
+    loc = locate(cfg.model)
+    if (args.action or "status") == "status":
+        where = {"folder": "downloaded", "cache": "found in the Hugging Face cache", "missing": "not downloaded"}
+        print(f"{cfg.model.id}: {where[loc.state]}")
+        print(f"  {loc.path or loc.folder}")
+        if loc.state == "missing":
+            print(dim("  Download it: `grain model download`, or Settings -> AI model."))
+        return 0
+    if loc.state != "missing":
+        print(f"Already on this PC: {loc.path}")
+        return 0
+    print(f"Downloading {cfg.model.id} (~1.4 GB) to {loc.folder} ...")
+    try:
+        download(cfg.model.id, loc.folder)
+    except DownloadError as e:
+        print(yellow(str(e)))
+        return 1
+    print("Done.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     _setup_console()
     ap = argparse.ArgumentParser(prog="grain", description="Search everything on your PC with EmbeddingGemma 2.")
@@ -413,6 +441,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("action", nargs="?", choices=["list", "add", "remove"])
     p.add_argument("paths", nargs="*", metavar="FOLDER")
     p.set_defaults(func=cmd_folders)
+
+    p = sub.add_parser("model", help="is the AI model downloaded? (`grain model download` fetches it)")
+    p.add_argument("action", nargs="?", choices=["status", "download"])
+    p.set_defaults(func=cmd_model)
 
     p = sub.add_parser("exclude", help="list, add or remove exclusions (a folder, or a pattern like *.log)")
     p.add_argument("action", nargs="?", choices=["list", "add", "remove"])

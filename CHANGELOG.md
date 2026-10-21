@@ -28,6 +28,16 @@ index format; the app migrates or rebuilds automatically and the notes say so.
 - Settings suggests **Documents, Pictures, Desktop and Downloads** (their real locations, also when
   OneDrive or you moved them) with how many files and how much data Grain Search would index in
   each; tick the ones you want and add them in one go. Engine API: `GET /config/suggestions`.
+- Settings → **AI model**: download EmbeddingGemma 2 (~1.4 GB) with a button, into a folder you
+  choose (saved as `model.dir`), with progress and Cancel; an interrupted download resumes. If the
+  model is already in the Hugging Face cache it is used as is. `grain model [status|download]` does
+  the same from the command line. Engine API: `GET /model`, `POST /model/download`,
+  `POST /model/download/cancel`.
+- Settings is split into tabs: **Folders · Exclusions · AI model · Shortcut**. It opens on AI model
+  while the model still has to be downloaded.
+- Settings shows where the AI model runs: the GPU's name and memory in use, or **CPU** with a
+  warning that indexing is slower and why (no NVIDIA GPU, CPU-only PyTorch, or set to CPU).
+  `/status` has a new `device_info`.
 - Settings → **Keyboard shortcut**: see the shortcut that opens the search (Alt+Space by default),
   change it by pressing the new keys, or reset it. It applies at once, no restart. If another
   program already uses the new shortcut, the box turns red, says so, and the old one keeps working;
@@ -40,6 +50,9 @@ index format; the app migrates or rebuilds automatically and the notes say so.
   icons are generated from `docs/assets/logo.svg`.
 
 ### Changed
+- The engine no longer downloads the AI model by itself: until it is downloaded (Settings → AI model)
+  nothing is indexed and searches find file names and exact text only. The model folder is never
+  indexed.
 - The search service listens on a free port chosen at start instead of the fixed 8766, so it no
   longer clashes with other programs; a second copy refuses to start instead of fighting over the
   index. The address is in `service.json`, as before.
@@ -58,6 +71,8 @@ index format; the app migrates or rebuilds automatically and the notes say so.
   notes folder under `AppData`); exclusions that match things inside it still apply.
 
 ### Fixed
+- The search bar no longer looks thin or shifted for a moment after you clear the text: the panel
+  now has its own height and no longer waits for the window to resize.
 - The search service no longer keeps running (holding ~1.4 GB of GPU memory) when the app is
   closed from Task Manager, crashes, or is stopped with Ctrl+C: Windows ends it together with the
   app, and the service also stops by itself once the app is gone. Files opened from Grain Search

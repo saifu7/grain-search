@@ -67,6 +67,9 @@ uv run grain serve
 
 Keeps EmbeddingGemma 2 loaded (GPU), indexes in the background and re-indexes files the moment
 they change (pauses automatically while a game / full-screen app runs or on battery).
+The AI model is downloaded once, from Settings → AI model or with `grain model download`
+(~1.4 GB; an existing copy in the Hugging Face cache is used as is). Until then nothing is indexed.
+
 Listens on `127.0.0.1` only, on a free port chosen at start (`--port` or `service.port` fixes it);
 the address and a secret token are written to
 `%LOCALAPPDATA%\GrainSearch\service.json`, the log to `%LOCALAPPDATA%\GrainSearch\logs\`.

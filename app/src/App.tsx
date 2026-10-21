@@ -154,7 +154,7 @@ export default function App() {
           if (!alive) return;
           setStatus(s);
           // first run: nothing to search yet, so open Settings once to add folders
-          if (s.setup_needed && !openedSetup.current) {
+          if ((s.setup_needed || s.model_state === "missing") && !openedSetup.current) {
             openedSetup.current = true;
             openSettings();
           }
@@ -169,10 +169,27 @@ export default function App() {
   }, [svc]);
 
   // -- window height follows content -------------------------------------------------------
+  // The panel has its own height in pixels; it never depends on the window's size, which
+  // changes a moment later (the resize goes through the app and Windows). So:
+  //   growing   -> make the window taller first, show the results area once that is done;
+  //   shrinking -> hide the results area at once, then make the window smaller.
+  // The window is always at least as tall as the panel; any extra space is transparent.
   const hasBody = query.trim().length > 0 || boot.state !== "ready";
+  const [showBody, setShowBody] = useState(hasBody);
+  const resizeSeq = useRef(0);
   const margin = settings.glass ? 0 : MARGIN_ROUNDED;
+  const panelHeight = (body: boolean) => BAR + (body ? 1 + BODY + FOOTER : 0);
   useLayoutEffect(() => {
-    setWindowHeight(margin * 2 + BAR + (hasBody ? 1 + BODY + FOOTER : 0));
+    const seq = ++resizeSeq.current;
+    const height = margin * 2 + panelHeight(hasBody);
+    if (hasBody) {
+      setWindowHeight(height).then(() => {
+        if (seq === resizeSeq.current) setShowBody(true); // still wanted (not cleared meanwhile)
+      });
+    } else {
+      setShowBody(false);
+      setWindowHeight(height);
+    }
   }, [hasBody, margin]);
 
   // -- actions -----------------------------------------------------------------------------
@@ -220,7 +237,7 @@ export default function App() {
   const cls = ["shell", settings.glass ? "glass" : "rounded", inTauri() ? "in-tauri" : "in-browser"].join(" ");
   return (
     <div className={cls} style={{ padding: margin }}>
-      <div className="panel">
+      <div className="panel" style={{ height: panelHeight(showBody) }}>
         <div className="bar" data-tauri-drag-region>
           <SearchIcon />
           <input
@@ -239,7 +256,7 @@ export default function App() {
           </button>
         </div>
 
-        {hasBody && (
+        {showBody && (
           <>
             <div className="divider" />
             <div className="body" style={{ height: BODY }}>
@@ -459,7 +476,8 @@ function Footer({ status, toast, settings }: { status: Status | null; toast: str
     const ix = status.indexer;
     const files = status.index.files.toLocaleString();
     const dev = status.device.startsWith("cuda") ? "GPU" : status.device.startsWith("cpu") ? "CPU" : status.device;
-    if (status.model_state === "unloaded") left = `Model unloaded (GPU memory freed) · ${files} files`;
+    if (status.model_state === "missing") left = "AI model not downloaded: open Settings (⚙) → AI model";
+    else if (status.model_state === "unloaded") left = `Model unloaded (GPU memory freed) · ${files} files`;
     else if (status.model_state === "loading") left = `Loading the model… · ${files} files`;
     else if (ix?.phase === "paused") left = `Indexing paused (${ix.paused_reason}) · ${files} files`;
     else if (ix?.phase === "indexing") left = `Indexing ${ix.done.toLocaleString()} / ${ix.total.toLocaleString()} · ${files} files · ${dev}`;

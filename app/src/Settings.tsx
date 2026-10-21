@@ -3,9 +3,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "./api";
 import { ensureService, getSettings, inTauri, pickFolder, setHotkey } from "./platform";
-import type { ConfigChange, ConfigView, FolderSuggestion, ServiceInfo, Status } from "./types";
+import type { ConfigChange, ConfigView, FolderSuggestion, ModelFiles, ServiceInfo, Status } from "./types";
 
 type Note = { kind: "ok" | "error"; text: string } | null;
+type Tab = "folders" | "exclusions" | "model" | "shortcut";
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: "folders", label: "Folders" },
+  { id: "exclusions", label: "Exclusions" },
+  { id: "model", label: "AI model" },
+  { id: "shortcut", label: "Shortcut" },
+];
 
 export default function Settings() {
   const [svc, setSvc] = useState<ServiceInfo | null>(null);
@@ -16,6 +24,8 @@ export default function Settings() {
   const [busy, setBusy] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<FolderSuggestion[]>([]);
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [model, setModel] = useState<ModelFiles | null>(null);
+  const [tab, setTab] = useState<Tab | null>(null);
   const noteTimer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
@@ -33,17 +43,36 @@ export default function Settings() {
       .getSuggestions(svc)
       .then((r) => setSuggestions(r.suggestions))
       .catch(() => {});
+    api
+      .getModel(svc)
+      .then((m) => {
+        setModel(m);
+        // first time: open on the AI model tab if the model still has to be downloaded
+        setTab((t) => t ?? (m.state === "ready" ? "folders" : "model"));
+      })
+      .catch(() => setTab((t) => t ?? "folders"));
   }, [svc]);
 
   // fast refresh while indexing (counts move), slow when idle
   const indexing = status?.indexer?.phase === "indexing" || status?.indexer?.phase === "scanning";
   const counting = suggestions.some((s) => s.counting);
+  const downloading = model?.state === "downloading";
+  // the download just finished: the model loads and indexing starts - show that without waiting 4 s
+  const wasDownloading = useRef(false);
+  useEffect(() => {
+    if (downloading) wasDownloading.current = true;
+    else if (wasDownloading.current) {
+      wasDownloading.current = false;
+      const timers = [1000, 2500, 5000].map((ms) => window.setTimeout(refresh, ms));
+      return () => timers.forEach((t) => window.clearTimeout(t));
+    }
+  }, [downloading, refresh]);
   useEffect(() => {
     if (!svc) return;
     refresh();
-    const t = window.setInterval(refresh, indexing || counting ? 1500 : 4000);
+    const t = window.setInterval(refresh, downloading ? 1000 : indexing || counting ? 1500 : 4000);
     return () => window.clearInterval(t);
-  }, [svc, refresh, indexing, counting]);
+  }, [svc, refresh, indexing, counting, downloading]);
 
   const show = (n: Note) => {
     setNote(n);
@@ -54,9 +83,9 @@ export default function Settings() {
   async function run(key: string, fn: () => Promise<unknown>) {
     setBusy(key);
     try {
-      const res = (await fn()) as { message?: string } & Partial<ConfigView>;
-      if (res.folders) setConfig(res as ConfigView);
-      if (res.message) show({ kind: "ok", text: res.message });
+      const res = (await fn()) as ({ message?: string } & Partial<ConfigView>) | undefined;
+      if (res?.folders) setConfig(res as ConfigView);
+      if (res?.message) show({ kind: "ok", text: res.message });
       refresh();
     } catch (e) {
       show({ kind: "error", text: String((e as Error)?.message ?? e) });
@@ -122,76 +151,106 @@ export default function Settings() {
 
       <IndexingCard status={status} busy={busy} onAction={(a) => run(a, () => api.indexControl(svc, a))} />
 
-      <section className="card" aria-labelledby="folders-h">
-        <div className="card-head">
-          <h2 id="folders-h">Folders to search</h2>
-          {inTauri() && (
-            <button className="btn primary" disabled={busy === "add-folder"} onClick={() => browse("folder")}>
-              Add folder…
-            </button>
-          )}
-        </div>
-        {suggestions.length > 0 && (
-          <SuggestedFolders
-            items={suggestions}
-            picked={picked}
-            busy={busy === "add-suggested"}
-            onToggle={togglePicked}
-            onAdd={addSuggested}
-          />
-        )}
-        {config.folders.length === 0 ? (
-          <p className="empty-state">No folders yet. Add the folders you want to search, such as Documents or Pictures.</p>
-        ) : (
-          <ul className="rows">
-            {config.folders.map((f) => (
-              <li key={f.path} className="row">
-                <FolderIcon />
-                <div className="row-main">
-                  <div className="row-title" title={f.path}>{baseName(f.path)}</div>
-                  <div className="row-sub" title={f.path}>{f.path}</div>
-                </div>
-                <div className={"row-meta" + (f.exists ? "" : " warn")}>{folderMeta(f, ix?.phase)}</div>
-                <button className="btn ghost" disabled={busy === `rm:${f.path}`} onClick={() => removeFolder(f.path)}>
-                  Remove
+      <Tabs
+        current={tab ?? "folders"}
+        onChange={setTab}
+        badges={{ model: model && model.state !== "ready" ? "!" : undefined }}
+      />
+
+      {(tab ?? "folders") === "folders" && (
+        <div role="tabpanel" id="panel-folders" aria-labelledby="tab-folders" className="tab-panel">
+          <section className="card" aria-labelledby="folders-h">
+            <div className="card-head">
+              <h2 id="folders-h">Folders to search</h2>
+              {inTauri() && (
+                <button className="btn primary" disabled={busy === "add-folder"} onClick={() => browse("folder")}>
+                  Add folder…
                 </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <PathInput
-          label="Add a folder by path"
-          placeholder={inTauri() ? "…or paste a folder path, e.g. D:\\Photos" : "Folder path, e.g. D:\\Photos"}
-          button="Add"
-          busy={busy === "add-folder"}
-          onSubmit={addFolder}
-        />
-      </section>
-
-      {inTauri() && <HotkeyCard />}
-
-      <section className="card" aria-labelledby="skip-h">
-        <div className="card-head">
-          <h2 id="skip-h">Skip these</h2>
-          {inTauri() && (
-            <button className="btn" disabled={busy === "add-exclude"} onClick={() => browse("exclude")}>
-              Exclude folder…
-            </button>
-          )}
+              )}
+            </div>
+            {suggestions.length > 0 && (
+              <SuggestedFolders
+                items={suggestions}
+                picked={picked}
+                busy={busy === "add-suggested"}
+                onToggle={togglePicked}
+                onAdd={addSuggested}
+              />
+            )}
+            {config.folders.length === 0 ? (
+              <p className="empty-state">No folders yet. Add the folders you want to search, such as Documents or Pictures.</p>
+            ) : (
+              <ul className="rows">
+                {config.folders.map((f) => (
+                  <li key={f.path} className="row">
+                    <FolderIcon />
+                    <div className="row-main">
+                      <div className="row-title" title={f.path}>{baseName(f.path)}</div>
+                      <div className="row-sub" title={f.path}>{f.path}</div>
+                    </div>
+                    <div className={"row-meta" + (f.exists ? "" : " warn")}>{folderMeta(f, ix?.phase)}</div>
+                    <button className="btn ghost" disabled={busy === `rm:${f.path}`} onClick={() => removeFolder(f.path)}>
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <PathInput
+              label="Add a folder by path"
+              placeholder={inTauri() ? "…or paste a folder path, e.g. D:\\Photos" : "Folder path, e.g. D:\\Photos"}
+              button="Add"
+              busy={busy === "add-folder"}
+              onSubmit={addFolder}
+            />
+          </section>
         </div>
-        <p className="muted small">
-          A folder you add above is always searched, even if a built-in rule covers it. Rules still apply to
-          what's inside it.
-        </p>
-        <ExcludeList excludes={config.excludes} busy={busy} onRemove={removeExclude} />
-        <PathInput
-          label="Add a rule"
-          placeholder="A folder path, or a pattern like *.log or *\build\*"
-          button="Add rule"
-          busy={busy === "add-exclude"}
-          onSubmit={addExclude}
-        />
-      </section>
+      )}
+
+      {tab === "exclusions" && (
+        <div role="tabpanel" id="panel-exclusions" aria-labelledby="tab-exclusions" className="tab-panel">
+          <section className="card" aria-labelledby="skip-h">
+            <div className="card-head">
+              <h2 id="skip-h">Skip these</h2>
+              {inTauri() && (
+                <button className="btn" disabled={busy === "add-exclude"} onClick={() => browse("exclude")}>
+                  Exclude folder…
+                </button>
+              )}
+            </div>
+            <p className="muted small">
+              A folder you add above is always searched, even if a built-in rule covers it. Rules still apply to
+              what's inside it.
+            </p>
+            <ExcludeList excludes={config.excludes} busy={busy} onRemove={removeExclude} />
+            <PathInput
+              label="Add a rule"
+              placeholder="A folder path, or a pattern like *.log or *\build\*"
+              button="Add rule"
+              busy={busy === "add-exclude"}
+              onSubmit={addExclude}
+            />
+          </section>
+        </div>
+      )}
+
+      {tab === "model" && (
+        <div role="tabpanel" id="panel-model" aria-labelledby="tab-model" className="tab-panel">
+          <ModelCard
+            model={model}
+            busy={busy}
+            onDownload={(folder) => run("model-download", () => api.downloadModel(svc, folder).then(setModel))}
+            onCancel={() => run("model-cancel", () => api.cancelModelDownload(svc).then(setModel))}
+          />
+          <DeviceCard status={status} />
+        </div>
+      )}
+
+      {tab === "shortcut" && (
+        <div role="tabpanel" id="panel-shortcut" aria-labelledby="tab-shortcut" className="tab-panel">
+          {inTauri() ? <HotkeyCard /> : <p className="muted pad">The shortcut can only be changed in the Grain Search app.</p>}
+        </div>
+      )}
 
       <footer className="s-footer muted small">
         Settings file: <span className="selectable">{config.config_file}</span>
@@ -483,6 +542,185 @@ function IndexingCard({
           <button className="btn" disabled={busy === "rescan"} onClick={() => onAction("rescan")}>Re-scan</button>
         </span>
       )}
+    </section>
+  );
+}
+
+function Tabs({
+  current,
+  onChange,
+  badges,
+}: {
+  current: Tab;
+  onChange: (t: Tab) => void;
+  badges: Partial<Record<Tab, string | undefined>>;
+}) {
+  // arrow keys move between tabs, like native tab controls
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    const i = TABS.findIndex((t) => t.id === current);
+    const next = TABS[(i + (e.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length].id;
+    onChange(next);
+    document.getElementById(`tab-${next}`)?.focus();
+  };
+  return (
+    <div className="tabs" role="tablist" aria-label="Settings sections" onKeyDown={onKey}>
+      {TABS.map((t) => (
+        <button
+          key={t.id}
+          id={`tab-${t.id}`}
+          role="tab"
+          aria-selected={current === t.id}
+          aria-controls={`panel-${t.id}`}
+          tabIndex={current === t.id ? 0 : -1}
+          className={"tab" + (current === t.id ? " on" : "")}
+          onClick={() => onChange(t.id)}
+        >
+          {t.label}
+          {badges[t.id] && (
+            <span className="tab-badge" aria-label="needs attention">
+              {badges[t.id]}
+            </span>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Settings -> AI model: download EmbeddingGemma 2 (the user picks the folder), with progress. */
+function ModelCard({
+  model,
+  busy,
+  onDownload,
+  onCancel,
+}: {
+  model: ModelFiles | null;
+  busy: string | null;
+  onDownload: (folder?: string) => void;
+  onCancel: () => void;
+}) {
+  const [folder, setFolder] = useState<string | null>(null); // picked, used by the next Download
+  if (!model)
+    return (
+      <section className="card">
+        <p className="muted">Checking the AI model…</p>
+      </section>
+    );
+  if (model.state === "ready")
+    return (
+      <section className="card" aria-labelledby="model-h">
+        <div className="card-head">
+          <h2 id="model-h">AI model</h2>
+          <span className="chip ok">Ready</span>
+        </div>
+        <p className="muted">
+          {model.source === "cache"
+            ? "EmbeddingGemma 2 · using the copy already on this PC (Hugging Face cache)."
+            : "EmbeddingGemma 2 · downloaded."}
+        </p>
+        <p className="row-sub selectable" title={model.path ?? ""}>{model.path}</p>
+      </section>
+    );
+
+  const downloading = model.state === "downloading";
+  const total = model.total_bytes ?? 0;
+  const done = Math.min(model.done_bytes ?? 0, total || Number.MAX_SAFE_INTEGER);
+  const pct = total ? Math.min(100, Math.floor((done / total) * 100)) : 0;
+  const target = folder ?? model.models_folder;
+  return (
+    <section className="card" aria-labelledby="model-h">
+      <div className="card-head">
+        <h2 id="model-h">AI model</h2>
+        {!downloading && <span className="chip paused">Not downloaded</span>}
+      </div>
+      <p>
+        Grain Search uses Google's <b>EmbeddingGemma 2</b> (about 1.4 GB) to understand your files. Until it's
+        downloaded, nothing is indexed and only file names and exact text can be found.
+      </p>
+      {downloading ? (
+        <>
+          <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+            <div style={{ width: `${pct}%` }} />
+          </div>
+          <div className="progress-row">
+            <span className="muted small">
+              {total ? `${formatBytes(done)} of ${formatBytes(total)} · ${pct}%` : "Starting the download…"}
+            </span>
+            <button className="btn" disabled={busy === "model-cancel"} onClick={onCancel}>
+              Cancel
+            </button>
+          </div>
+          <p className="muted small">
+            You can close this window. If the download stops or you quit Grain Search, it continues where it left off
+            next time.
+          </p>
+        </>
+      ) : (
+        <>
+          <div className="model-folder">
+            <span className="muted small">Save to</span>
+            <span className="row-sub selectable" title={target}>{target}</span>
+            {inTauri() && (
+              <button
+                className="btn"
+                onClick={async () => {
+                  const f = await pickFolder("Where should the AI model be saved?");
+                  if (f) setFolder(f);
+                }}
+              >
+                Change…
+              </button>
+            )}
+          </div>
+          {model.error && (
+            <p className="hotkey-problem" role="alert">
+              {model.error}
+            </p>
+          )}
+          <div>
+            <button
+              className="btn primary"
+              disabled={busy === "model-download"}
+              onClick={() => onDownload(folder ?? undefined)}
+            >
+              {model.error ? "Try again" : "Download model"}
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+/** Where the AI model runs: the GPU (fast) or the CPU (slower, and why). */
+function DeviceCard({ status }: { status: Status | null }) {
+  if (!status || status.model_state === "missing") return null; // nothing to run until it's downloaded
+  const d = status.device_info ?? {};
+  let chip = "";
+  let tone = "idle";
+  let text = "";
+  let note = "";
+  if (status.model_state === "unloaded") {
+    text = "Model unloaded (GPU memory freed). It loads again on your next search.";
+  } else if (status.model_state === "loading" || !d.kind) {
+    text = "Loading the model…";
+  } else if (d.kind === "gpu") {
+    [chip, tone] = ["GPU", "ok"];
+    text = d.name ?? "NVIDIA GPU";
+    if (d.memory_mb) text += ` · ${(d.memory_mb / 1024).toFixed(1)} GB in use`;
+  } else {
+    [chip, tone] = ["CPU", "paused"];
+    text = "Running on the CPU: indexing is much slower than on an NVIDIA GPU.";
+    note = d.reason ?? "";
+  }
+  return (
+    <section className="card device-card" aria-label="Where the AI model runs">
+      <div className="device-line">
+        {chip && <span className={`chip ${tone}`}>{chip}</span>}
+        <span className="status-text">{text}</span>
+      </div>
+      {note && <p className="muted small device-note">{note}</p>}
     </section>
   );
 }

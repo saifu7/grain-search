@@ -97,6 +97,13 @@ class ModelUnloadTest(unittest.TestCase):
         self.unload()
         self.assertEqual(self.status()["model_state"], "unloaded")
 
+    def test_status_reports_where_the_model_runs(self):
+        info = self.status()["device_info"]
+        self.assertEqual(info["kind"], "cpu")
+        self.assertIn("name", info)
+        self.unload()
+        self.assertEqual(self.status()["device_info"], {}, "nothing to report while unloaded")
+
     def test_indexing_waits_while_unloaded_and_resumes_on_load(self):
         self.unload()
         loads = self.model.loads
@@ -154,6 +161,16 @@ class ModelUnloadTest(unittest.TestCase):
         self.svc.shutdown()
         self.assertLess(time.perf_counter() - t0, 8, "a waiting indexer must not hold up shutdown")
         self.assertFalse(self.svc.indexer.thread.is_alive())
+
+
+class CpuReasonTest(unittest.TestCase):
+    def test_reasons(self):
+        from grain_search.embedder import cpu_reason
+
+        self.assertIn("Set to CPU", cpu_reason("cpu", True, True))
+        self.assertIn("NVIDIA GPU, but the CPU-only build", cpu_reason("auto", False, True))
+        self.assertEqual(cpu_reason("auto", False, False), "The CPU-only build of PyTorch is installed.")
+        self.assertIn("No NVIDIA GPU found", cpu_reason("auto", True, False))
 
 
 if __name__ == "__main__":

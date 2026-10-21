@@ -38,6 +38,9 @@ checksums and build attestations, Dependabot, CodeQL.
 - ✅ Suggested folders (Documents, Pictures, Desktop, Downloads) with file counts and sizes, to tick
   and add.
 - ✅ Keyboard shortcut section: change it live, red warning when another program owns it.
+- ✅ GPU or CPU shown in Settings (GPU name and memory; on the CPU, why).
+- ✅ Download model button (folder of your choice, progress, cancel, resume); no indexing before it.
+- ✅ Settings in tabs: Folders · Exclusions · AI model · Shortcut.
 - Decided (first run): no separate wizard; Settings is the first-run screen. A **Download model**
   button (user picks the folder), no scanning before the model is there, GPU/CPU shown, hotkey
   section in Settings. The runtime (Python + PyTorch) is downloaded by the installer (Phase 4).
