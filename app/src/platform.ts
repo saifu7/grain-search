@@ -32,6 +32,14 @@ export async function getSettings(): Promise<UiSettings> {
   return { glass, hotkey: "Alt+Space" };
 }
 
+/** Change the global shortcut live. Resolves to the shortcut now in use; rejects with the reason
+ *  (e.g. another program already uses it), in which case the old shortcut keeps working. */
+export async function setHotkey(hotkey: string): Promise<string> {
+  const t = tauri();
+  if (!t) throw new Error("Only the Grain Search app can change the shortcut");
+  return t.core.invoke<string>("set_hotkey", { hotkey });
+}
+
 export function hideWindow(): void {
   tauri()?.core.invoke("hide_window").catch(() => {});
 }

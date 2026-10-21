@@ -7,7 +7,7 @@ import hashlib
 import os
 import stat
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .config import Config
 from .extractors import kind_of
@@ -73,6 +73,21 @@ def is_under(path: str, roots: list[str]) -> bool:
         if p == r or p.startswith(r.rstrip("\\/") + os.sep):
             return True
     return False
+
+
+def count_indexable(cfg: Config, folder: str, stop=lambda: False) -> tuple[int, int]:
+    """How many files in `folder`, and how many bytes, Grain Search would index if it were added:
+    the same rules as a real scan (exclusions, file types, size limits, hidden files)."""
+    trial = replace(cfg, roots=[folder])
+    files = size = 0
+    for fi in crawl(trial):
+        if fi.kind == "image" and not cfg.model.images:
+            continue
+        files += 1
+        size += fi.size
+        if files % 500 == 0 and stop():
+            break
+    return files, size
 
 
 def excluder_for(cfg: Config) -> Excluder:

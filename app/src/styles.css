@@ -700,6 +700,83 @@ body:has(.settings-page) {
   padding: 1px 6px;
   flex: none;
 }
+.suggest {
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+  padding: 10px 12px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.suggest-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.suggest-title {
+  font-weight: 600;
+}
+.suggest .rows .row:last-child {
+  border-bottom: none;
+}
+.suggest-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  cursor: pointer;
+}
+.suggest-row .row-main,
+.suggest-row .row-title,
+.suggest-row .row-sub {
+  display: block;
+}
+.suggest-row input {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  accent-color: var(--accent, #0a84ff);
+  cursor: pointer;
+}
+.hotkey-box {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 6px 12px;
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+}
+.hotkey-box.rec {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.hotkey-box.bad {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent);
+}
+.keycaps {
+  display: inline-flex;
+  gap: 6px;
+}
+.keycaps kbd {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 28px;
+  text-align: center;
+  padding: 4px 9px;
+  border: 1px solid var(--edge);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--field);
+}
+.hotkey-problem {
+  color: var(--danger);
+  font-size: 13px;
+  margin: 0;
+}
 .empty-state {
   color: var(--muted);
   padding: 14px 0;

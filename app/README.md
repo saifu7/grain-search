@@ -40,7 +40,8 @@ Start with Windows · Quit (also stops the service if the bar started it). **Unl
 AI model's GPU memory (~0.9 GB) and **Stop engine** frees everything; the next Alt+Space brings
 back whichever you unloaded.
 
-**Settings window** (⚙ in the search bar, or tray → Settings…): add/remove folders with the folder
+**Settings window** (⚙ in the search bar, or tray → Settings…): tick suggested folders (Documents,
+Pictures, Desktop, Downloads, with file counts and sizes), add/remove folders with the folder
 picker or by pasting a path, add exclusions (a folder or a pattern like `*.log`), see per-folder
 counts, pause/resume, re-scan. Changes apply immediately. In a browser (UI development) the page
 is at `#settings`, with a text box instead of the folder picker.
@@ -56,8 +57,10 @@ Copy `settings.example.json` to `%APPDATA%\GrainSearch\settings.json`:
 | `engine_dir` | found automatically | the engine folder (where its `pyproject.toml` is). Normally not needed: the app looks for an `engine` folder next to itself and in the folders above it, so a development build finds `<repo>\engine` (the old name `project_dir` still works) |
 | `uv` | found automatically | full path to `uv.exe`; normally found on PATH or in `%USERPROFILE%\.local\bin` |
 
-**Alt+Space taken?** PowerToys Run uses it too: PowerToys → PowerToys Run → change or disable its
-shortcut, or set another `hotkey` here. If the hotkey can't be registered, the bar's footer says so.
+**Changing the shortcut:** Settings → **Keyboard shortcut** → Change, then press the new keys
+(Ctrl, Alt or Shift plus a letter, digit, Space or F1–F12). It applies at once and is saved as
+`hotkey` in `settings.json`. **Alt+Space taken?** PowerToys Run uses it too: the Settings section
+turns red and says so; pick another shortcut there, or change PowerToys Run's own shortcut.
 
 ## UI development in a browser
 

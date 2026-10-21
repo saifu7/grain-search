@@ -1,5 +1,14 @@
 // Talks to `grain serve` (127.0.0.1 only, bearer token).
-import type { ConfigChange, ConfigView, ModelState, Preview, SearchPayload, ServiceInfo, Status } from "./types";
+import type {
+  ConfigChange,
+  ConfigView,
+  FolderSuggestion,
+  ModelState,
+  Preview,
+  SearchPayload,
+  ServiceInfo,
+  Status,
+} from "./types";
 
 const enc = encodeURIComponent;
 
@@ -87,6 +96,9 @@ export const pageUrl = (svc: ServiceInfo, path: string, page: number, width: num
 
 // -- settings: folders and exclusions (applied live by the service) ---------------------
 export const getConfig = (svc: ServiceInfo) => call<ConfigView>(svc, "/config");
+
+export const getSuggestions = (svc: ServiceInfo) =>
+  call<{ suggestions: FolderSuggestion[] }>(svc, "/config/suggestions");
 
 export const changeFolder = (svc: ServiceInfo, action: "add" | "remove", path: string) =>
   call<ConfigChange>(svc, "/config/folders", { method: "POST", body: JSON.stringify({ action, path }) });

@@ -34,8 +34,10 @@ from starlette.routing import Route
 
 from . import __version__, previews, ranking, winstate
 from .config import DEFAULT_EXCLUDES, Config, change_excludes, change_folders, read_raw, save_raw
+from .crawler import count_indexable, is_under
 from .embedder import Embedder, free_gpu_memory, is_out_of_memory
 from .indexer import IndexState, Stopped, index_paths, run_index
+from .known_folders import known_folders
 from .search import Results, Searcher
 from .store import FileRow, Store
 
@@ -368,6 +370,83 @@ class BackgroundIndexer:
         return True
 
 
+# -- folder suggestions for Settings ---------------------------------------------------
+SUGGESTION_TTL_S = 600.0
+
+
+class FolderSuggestions:
+    """Documents / Pictures / Desktop / Downloads that aren't added yet, with how many files (and
+    bytes) Grain Search would index in each. Counting a big folder can take a while, so it runs
+    in one background thread; the list is answered at once and the numbers fill in."""
+
+    def __init__(self, cfg: Config, find=None):
+        self.cfg = cfg
+        self.find = find or known_folders
+        self._lock = threading.Lock()
+        self._counts: dict[str, tuple[float, int, int]] = {}  # path -> (when, files, bytes)
+        self._queue: list[str] = []
+        self._worker: threading.Thread | None = None
+        self.closed = False
+
+    def invalidate(self) -> None:
+        """Exclusions changed: counts may differ now."""
+        with self._lock:
+            self._counts.clear()
+
+    def view(self) -> list[dict]:
+        roots = list(self.cfg.roots)
+        now = time.monotonic()
+        out = []
+        with self._lock:
+            for f in self.find():
+                path = f["path"]
+                if is_under(path, roots) or any(is_under(r, [path]) for r in roots):
+                    continue  # already added, or would overlap a folder you added
+                counted = self._counts.get(path)
+                fresh = counted is not None and now - counted[0] < SUGGESTION_TTL_S
+                if counted and counted[1] == 0:
+                    if not fresh:
+                        self._enqueue(path)
+                    continue  # nothing Grain Search would index in it
+                if not fresh:
+                    self._enqueue(path)
+                out.append(
+                    {
+                        **f,
+                        "files": counted[1] if counted else None,
+                        "bytes": counted[2] if counted else None,
+                        "counting": not fresh,
+                    }
+                )
+        return out
+
+    def _enqueue(self, path: str) -> None:  # caller holds the lock
+        if path not in self._queue:
+            self._queue.append(path)
+        if self._worker is None or not self._worker.is_alive():
+            self._worker = threading.Thread(target=self._work, name="count-folders", daemon=True)
+            self._worker.start()
+
+    def _work(self) -> None:
+        winstate.lower_current_thread_priority()
+        while not self.closed:
+            with self._lock:
+                if not self._queue:
+                    return
+                path = self._queue[0]
+            try:
+                files, size = count_indexable(self.cfg, path, stop=lambda: self.closed)
+            except Exception:
+                files, size = 0, 0
+            with self._lock:
+                self._counts[path] = (time.monotonic(), files, size)
+                if self._queue and self._queue[0] == path:
+                    self._queue.pop(0)
+
+    def close(self) -> None:
+        self.closed = True
+
+
 # -- the web app ------------------------------------------------------------------------
 def _doc_json(d) -> dict:
     out = asdict(d)
@@ -408,6 +487,7 @@ class SearchService:
         self.started = time.time()
         self.indexer = BackgroundIndexer(cfg, self.embedder, watch, initial_scan) if background else None
         self.thumb_dir = cfg.data_dir / "thumbs"
+        self.suggestions = FolderSuggestions(cfg)
         self._config_lock = threading.Lock()
         self.request_exit = lambda: None  # set by serve(): asks the web server to stop
         self.app = self._build_app()
@@ -420,6 +500,7 @@ class SearchService:
 
     def shutdown(self):
         self.embedder.close()  # an indexer waiting for the model gives up
+        self.suggestions.close()
         if self.indexer:
             self.indexer.stop()
         with self.db_lock:
@@ -477,6 +558,7 @@ class SearchService:
                     self.cfg.roots = list(raw["roots"])
                 else:
                     self.cfg.excludes = list(raw["excludes"])
+                    self.suggestions.invalidate()  # suggested folders may count differently now
         if changed and self.indexer:
             self.indexer.reconfigure()
         return {"ok": True, "changed": changed, "message": message, "value": value, **self._config_view()}
@@ -661,6 +743,9 @@ class SearchService:
             svc.request_exit()
             return JSONResponse({"ok": True})
 
+        async def suggestions(request: Request):
+            return JSONResponse({"suggestions": await run_in_threadpool(svc.suggestions.view)})
+
         async def config_get(request: Request):
             return JSONResponse(await run_in_threadpool(svc._config_view))
 
@@ -692,6 +777,7 @@ class SearchService:
             Route("/index/resume", _control("resume"), methods=["POST"]),
             Route("/index/rescan", _control("rescan"), methods=["POST"]),
             Route("/config", config_get),
+            Route("/config/suggestions", suggestions),
             Route("/config/folders", _config_change("folders"), methods=["POST"]),
             Route("/config/excludes", _config_change("excludes"), methods=["POST"]),
         ]

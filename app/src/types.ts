@@ -89,6 +89,17 @@ export type Item =
 
 export type Section = "top" | "docs" | "related" | "images";
 
+/** GET /config/suggestions: a standard folder (Documents, Pictures…) not added yet. */
+export interface FolderSuggestion {
+  key: "documents" | "pictures" | "desktop" | "downloads";
+  label: string;
+  path: string;
+  /** files Grain Search would index there; null until the first count finishes */
+  files: number | null;
+  bytes: number | null;
+  counting: boolean;
+}
+
 /** GET /config: what is indexed and what is skipped. */
 export interface ConfigView {
   config_file: string | null;
