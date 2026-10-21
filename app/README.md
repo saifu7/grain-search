@@ -35,8 +35,10 @@ npm run tauri build
 
 `=text` only files that contain the text · `~idea` only by meaning · `type:img`, `ext:pdf`, `in:D:\work`, `after:2025-01-01`
 
-Tray icon: Open · Settings… · Pause / Resume indexing · Re-scan · Start with Windows · Quit (also
-stops the service if the bar started it).
+Tray icon: Open · Settings… · Pause / Resume indexing · Re-scan · Unload model · Stop engine ·
+Start with Windows · Quit (also stops the service if the bar started it). **Unload model** frees the
+AI model's GPU memory (~0.9 GB) and **Stop engine** frees everything; the next Alt+Space brings
+back whichever you unloaded.
 
 **Settings window** (⚙ in the search bar, or tray → Settings…): add/remove folders with the folder
 picker or by pasting a path, add exclusions (a folder or a pattern like `*.log`), see per-folder

@@ -285,7 +285,12 @@ flowchart TB
     app's process (`GRAIN_SEARCH_PARENT_PID`) and stops cleanly when it is gone. Files the
     engine opens for the user (Word, SumatraPDF, VS Code) are started outside the job, so
     quitting Grain Search never closes them.
-  - **Planned (Phase 1):** the model unloads after N idle minutes.
+- **Freeing the GPU by hand.** Tray → Unload model (`POST /model/unload`) drops the model's
+  weights; tray → Stop engine stops the engine process. On every Alt+Space the window makes sure
+  the engine runs and sends `POST /model/load`. `LockedEmbedder.wanted` says whether the model
+  should be in memory: while it is cleared, background indexing waits (watcher events stay
+  queued) instead of loading the model, and a search sets it again. Exact-text search
+  (the "fast" stage) never needs the model.
 
 ---
 
@@ -387,7 +392,7 @@ and set their own exclusions, since the temp folder lives under `AppData`.
 
 Tracked in [tech-debt.md](tech-debt.md) and GitHub issues:
 
-- The model stays on the GPU while idle (Phase 1 idle unload).
+- The model stays on the GPU until you unload it from the tray (no automatic idle unload yet).
 - Images are indexed after all documents on the first run.
 - Scanned PDF pages without text are detected but not yet searchable.
 - AMD/Intel GPUs fall back to the CPU (DirectML later).

@@ -43,6 +43,25 @@ export default function App() {
     connect();
   }, [connect]);
 
+  // Every Alt+Space: start the engine again if it was stopped (tray -> Stop engine) and bring
+  // the model back if it was unloaded (tray -> Unload model). Quick when both are already up;
+  // "Starting…" only shows if it takes a moment.
+  const wake = useCallback(() => {
+    const slow = setTimeout(() => setBoot({ state: "starting" }), 400);
+    ensureService()
+      .then((s) => {
+        clearTimeout(slow);
+        setBoot((b) =>
+          b.state === "ready" && b.svc.url === s.url && b.svc.token === s.token ? b : { state: "ready", svc: s },
+        );
+        api.loadModel(s).catch(() => {});
+      })
+      .catch((e) => {
+        clearTimeout(slow);
+        setBoot({ state: "error", message: String(e?.message ?? e) });
+      });
+  }, []);
+
   // -- every time the hotkey shows the window -----------------------------------------
   useEffect(
     () =>
@@ -56,9 +75,9 @@ export default function App() {
           input.current?.focus();
           input.current?.select();
         });
-        if (boot.state === "error") connect();
+        wake();
       }),
-    [boot.state, connect],
+    [wake],
   );
   useEffect(() => input.current?.focus(), []);
 
@@ -439,7 +458,9 @@ function Footer({ status, toast, settings }: { status: Status | null; toast: str
     const ix = status.indexer;
     const files = status.index.files.toLocaleString();
     const dev = status.device.startsWith("cuda") ? "GPU" : status.device.startsWith("cpu") ? "CPU" : status.device;
-    if (ix?.phase === "paused") left = `Indexing paused (${ix.paused_reason}) · ${files} files`;
+    if (status.model_state === "unloaded") left = `Model unloaded (GPU memory freed) · ${files} files`;
+    else if (status.model_state === "loading") left = `Loading the model… · ${files} files`;
+    else if (ix?.phase === "paused") left = `Indexing paused (${ix.paused_reason}) · ${files} files`;
     else if (ix?.phase === "indexing") left = `Indexing ${ix.done.toLocaleString()} / ${ix.total.toLocaleString()} · ${files} files · ${dev}`;
     else if (ix?.phase === "scanning" || ix?.phase === "loading") left = `Checking for changes… · ${files} files`;
     else left = `${files} files indexed · ${dev}`;

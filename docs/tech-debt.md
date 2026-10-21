@@ -2,7 +2,7 @@
 
 Known issues to fix later, most important first. Each item: what happens, why it matters,
 how to fix it, rough effort. Each one is tracked as a GitHub issue (label `tech-debt`); this file
-is the long-form background. Last updated 15 Oct 2026.
+is the long-form background. Last updated 20 Oct 2026.
 
 ---
 
@@ -17,17 +17,20 @@ the app leaves it alone, as before.
 
 ---
 
-## 2. Model stays on the GPU even when nobody is searching  · **Medium** · ~3 h
+## 2. Model stays on the GPU even when nobody is searching  · **Medium** · partly fixed
 
 **What happens:** the service keeps EmbeddingGemma 2 loaded all the time (~0.9 GB weights +
 ~0.5 GB CUDA context ≈ 1.4 GB). Needed for instant searches, but wasteful when the PC is
 used for games or other GPU work for hours.
 
-**Fix:** idle unload — after N minutes with no search and no indexing work, delete the model,
-`gc.collect()`, `torch.cuda.empty_cache()` (GPU memory → ~0). Reload on the next search
-(~5–10 s; the UI already shows "Starting search…"-style states, add a "Waking up…" one).
-Config: `model.idle_unload_minutes` (default 10, `0` = never). Needs care around the
-`LockedEmbedder` lock so a search and an unload can't race.
+**Done (manual):** tray → **Unload model** frees the weights (~0.9 GB; the CUDA context stays
+until the process ends) and **Stop engine** frees everything. Alt+Space brings back whichever
+was unloaded. While the model is unloaded, background indexing waits and changed files stay
+queued; a search loads the model again.
+
+**Still open:** an automatic unload after N idle minutes (decided against for now). If added
+later: decide what counts as idle (searches only, or indexing too) so a program that saves a
+file every few minutes doesn't keep the model loaded or reload it over and over.
 
 ---
 

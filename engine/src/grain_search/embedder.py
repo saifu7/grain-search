@@ -163,6 +163,18 @@ class GemmaEmbedder:
                 free_gpu_memory()
                 bs = max(1, bs // 2)
 
+    @property
+    def loaded(self) -> bool:
+        return self._model is not None
+
+    def unload(self) -> None:
+        """Drop the model and give its GPU memory back (~0.9 GB). The CUDA context stays until
+        the process ends. The next encode loads the model again."""
+        self._model = None
+        self._load_error = None  # a later load may succeed (e.g. the GPU has room again)
+        self.device_desc = "not loaded"
+        free_gpu_memory()
+
     # -- public API -------------------------------------------------------------
     def warm_up(self) -> None:
         """Load the model and run one tiny encode, so problems show up immediately."""
@@ -234,9 +246,19 @@ class HashEmbedder:
         self.dim = dim
         self.device_desc = "fake"
         self.image_errors: dict[str, str] = {}
+        self.loaded = False
+        self.loads = 0  # how often the "model" was loaded (tests)
+
+    def _ensure_loaded(self) -> None:  # behaves like the real model's lazy loading
+        if not self.loaded:
+            self.loaded = True
+            self.loads += 1
+
+    def unload(self) -> None:
+        self.loaded = False
 
     def warm_up(self) -> None:
-        pass
+        self._ensure_loaded()
 
     def _vec(self, text: str) -> np.ndarray:
         v = np.zeros(self.dim, np.float32)
@@ -247,14 +269,18 @@ class HashEmbedder:
         return v / n if n else v
 
     def encode_query(self, text: str) -> np.ndarray:
+        self._ensure_loaded()
         return self._vec(text)
 
     def encode_documents(self, docs: Sequence[tuple[str, str]]) -> np.ndarray:
+        self._ensure_loaded()
         return np.stack([self._vec(f"{t} {x}") for t, x in docs]) if docs else np.zeros((0, self.dim), np.float32)
 
     def encode_images(self, paths: Sequence[str]) -> np.ndarray:
         # "describes" an image by its file name, e.g. red_car.png -> "red car"
         import os
+
+        self._ensure_loaded()
 
         from .extractors.image import MIN_SIDE, TOO_SMALL
 

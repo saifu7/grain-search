@@ -1,6 +1,6 @@
 [package]
 name = "grain-search"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 description = "Grain Search: search your files and photos by meaning on Windows, with EmbeddingGemma 2"
 license = "MIT"
 repository = "https://github.com/saifu7/grain-search"

@@ -60,8 +60,14 @@ export interface Preview {
   error?: string;
 }
 
+/** Whether the AI model is in (GPU) memory; tray -> Unload model frees it. */
+export type ModelState = "loaded" | "loading" | "unloaded";
+
 export interface Status {
   device: string;
+  model_state?: ModelState;
+  /** why the last attempt to load the model failed, if it did */
+  model_error?: string;
   /** true when no folders are set up yet (nothing to index or search) */
   setup_needed?: boolean;
   folders?: string[];

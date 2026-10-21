@@ -1,6 +1,6 @@
 [project]
 name = "grain-search"
-version = "0.1.0"
+version = "0.1.0a1"
 description = "Search your files and photos by meaning, locally, with Google's EmbeddingGemma 2"
 readme = "README.md"
 license = "MIT"
