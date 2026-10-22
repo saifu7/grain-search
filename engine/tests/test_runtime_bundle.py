@@ -42,7 +42,19 @@ class PureTest(unittest.TestCase):
         pins = rb.torch_pins((ROOT / "engine" / "uv.lock").read_text("utf-8"))
         self.assertNotIn("+", pins["torch"])
         self.assertNotIn("+", pins["torchvision"])
-        self.assertTrue(pins["cuda_index"].startswith("https://download.pytorch.org/whl/cu"))
+        self.assertTrue(rb.is_pytorch_site(pins["cuda_index"]))
+        self.assertIn("/whl/cu", pins["cuda_index"])
+
+    def test_only_the_real_pytorch_site_counts(self):
+        self.assertTrue(rb.is_pytorch_site("https://download.pytorch.org/whl/cu128"))
+        for fake in (
+            "https://evil.example/download.pytorch.org/whl/cu128",
+            "https://download.pytorch.org.evil.example/whl/cu128",
+            "https://evil.example/?download.pytorch.org",
+            "http://download.pytorch.org/whl/cu128",
+            "https://pypi.org/simple",
+        ):
+            self.assertFalse(rb.is_pytorch_site(fake), fake)
 
     def test_fingerprint_changes_only_with_downloads(self):
         pins = {"torch": "2.11.0", "torchvision": "0.26.0"}

@@ -24,19 +24,27 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from urllib.parse import urlparse
 
 from versions import ROOT
 
 ENGINE = ROOT / "engine"
 DEFAULT_OUT = ROOT / "app" / "src-tauri" / "resources" / "engine"
 PYTHON = "3.12"  # same as CI
-CPU_INDEX = "https://download.pytorch.org/whl/cpu"
+PYTORCH_HOST = "download.pytorch.org"
+CPU_INDEX = f"https://{PYTORCH_HOST}/whl/cpu"
 
 # Installed separately, from PyTorch's own download site (CUDA or CPU build). These packages only
 # exist for PyTorch's sake (its GPU libraries on Linux), so they are left to that step too.
 GENERATED = {"requirements.txt", "runtime.json", "uv", "uv.exe"}
 TORCH_FAMILY = {"torch", "torchvision"}
 TORCH_ONLY = re.compile(r"^(nvidia-|cuda-|triton\b)")
+
+
+def is_pytorch_site(url: str) -> bool:
+    """True only for https://download.pytorch.org/... (the host itself, not a look-alike)."""
+    u = urlparse(url)
+    return u.scheme == "https" and u.hostname == PYTORCH_HOST
 
 
 def torch_pins(lock_text: str) -> dict:
@@ -46,7 +54,7 @@ def torch_pins(lock_text: str) -> dict:
     for pkg in lock.get("package", []):
         name = pkg.get("name")
         registry = (pkg.get("source") or {}).get("registry", "")
-        if name in TORCH_FAMILY and "download.pytorch.org" in registry:
+        if name in TORCH_FAMILY and is_pytorch_site(registry):
             out[name] = pkg["version"].split("+", 1)[0]
             out["cuda_index"] = registry.rstrip("/")
     missing = TORCH_FAMILY - out.keys()
