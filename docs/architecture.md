@@ -323,7 +323,7 @@ Report vulnerabilities privately: [SECURITY.md](../SECURITY.md).
 | Index, vectors, thumbnails | `%LOCALAPPDATA%\GrainSearch\index\` (`index_dir` in config.json moves it) | same, "Move index" button |
 | Logs | `%LOCALAPPDATA%\GrainSearch\logs\service.log` | same, rotated |
 | Service handshake | `%LOCALAPPDATA%\GrainSearch\service.json` | same |
-| Python + PyTorch | `engine/.venv` (uv, development) | `%LOCALAPPDATA%\GrainSearch\runtime\` (Phase 4) |
+| Python + PyTorch | development: `engine/.venv` (uv); installed app: `%LOCALAPPDATA%\GrainSearch\runtime\` (made by the setup window) | same |
 | Model weights | Hugging Face cache | `%LOCALAPPDATA%\GrainSearch\models\` (Phase 4) |
 | Port | chosen by the OS at start, written to `service.json` | same |
 | Engine folder | found at run time: `engine` next to the app or in a folder above it (development: `<repo>\engine`); `engine_dir` / `GRAIN_SEARCH_ENGINE_DIR` override | bundled runtime (Phase 4) |
@@ -354,21 +354,34 @@ flowchart LR
 Details: [releasing.md](releasing.md). One version number is shared by `pyproject.toml`,
 `package.json`, `Cargo.toml` and `tauri.conf.json`; CI fails if they differ or don't match the tag.
 
-### First run of the installed app (Planned, Phase 4)
+### First run of the installed app (Phase 4)
+The installer (~15 MB) carries the app and an `engine` folder made by `scripts/runtime_bundle.py`:
+our wheel, `uv`, `requirements.txt` (every library pinned from `uv.lock`, without PyTorch) and
+`runtime.json` (Python version, PyTorch/torchvision versions, CUDA and CPU download sites,
+fingerprint). `app/src-tauri/src/setup.rs` does the rest:
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant A as Installed app
-    participant UV as bundled uv.exe
+    participant A as Installed app (setup window)
+    participant UV as bundled uv
     participant HF as Hugging Face
-    U->>A: run installer (~15 MB), then the app
-    A->>U: wizard: choose folders, exclusions, hotkey
-    A->>A: detect GPU (NVIDIA ≥ 4 GB → CUDA build, else CPU)
-    A->>UV: uv sync --frozen (pinned uv.lock) → runtime\
-    A->>HF: download EmbeddingGemma 2 → models\ (resumable)
-    A->>A: start engine (offline mode), begin indexing
-    A->>U: search window ready
+    U->>A: run installer, then the app
+    A->>A: nvidia-smi → GPU name? CUDA build : CPU build
+    A->>A: free space check (~7 GB CUDA / ~2 GB CPU)
+    A->>UV: uv venv (Python 3.12) → runtime\.venv
+    A->>UV: uv pip install -r requirements.txt
+    A->>UV: uv pip install torch==… torchvision==… (CUDA or CPU site)
+    A->>UV: uv pip install grain_search-….whl
+    A->>A: runtime\setup.json (fingerprint, wheel, build)
+    A->>U: Settings → AI model → Download
+    U->>HF: EmbeddingGemma 2 → models\ (resumable)
+    A->>A: python -m grain_search serve, indexing starts
 ```
+Later starts compare `runtime.json` with `setup.json`: same fingerprint and wheel → start at once;
+only the wheel changed (an update without new libraries) → reinstall just the engine (seconds);
+new fingerprint → the setup window runs again (downloads already in `runtime\cache` are reused).
+Development builds keep using `uv run` in the repository (`GRAIN_SEARCH_USE_RUNTIME=1` tries the
+installed way).
 
 ---
 

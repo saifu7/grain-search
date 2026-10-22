@@ -8,6 +8,15 @@ index format; the app migrates or rebuilds automatically and the notes say so.
 ## [Unreleased]
 
 ### Added
+- **The installer works on any Windows PC**: on first start a small setup window checks for an
+  NVIDIA GPU and free disk space, then downloads Python, the libraries and PyTorch (CUDA or CPU
+  build) at exactly the versions Grain Search is tested with, into
+  `%LOCALAPPDATA%\GrainSearch\runtime`. Progress, Cancel and Retry (finished downloads are kept);
+  when it's done, Settings opens to download the AI model. Updates only download again when the
+  libraries changed.
+- Uninstalling removes the downloaded runtime (Python, libraries, PyTorch). Ticking **Delete the
+  application data** removes every trace: index, AI model (also from a folder you chose), settings
+  and logs. The Hugging Face cache, shared with other tools, is left alone.
 - Search engine: documents (PDF, Word, PowerPoint, Excel, text, code) and images, indexed with
   Google's EmbeddingGemma 2; hybrid search (exact text, all words, file name, meaning) with results
   labelled "Contains your text" / "Related by meaning".

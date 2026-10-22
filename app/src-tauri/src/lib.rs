@@ -21,10 +21,13 @@ use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
+mod setup;
+
 const WIDTH_ROUNDED: f64 = 756.0; // 720 panel + 2 x 18 px transparent margin for the shadow
 const WIDTH_GLASS: f64 = 720.0;
 const SERVICE_START_TIMEOUT: Duration = Duration::from_secs(180);
 const SETTINGS: &str = "settings"; // label of the Settings window
+const SETUP: &str = "setup"; // label of the first-run setup window (installed app)
 
 // -- app folders -------------------------------------------------------------------------
 /// Where Grain Search keeps its files. Must match the engine's `paths.py` exactly:
@@ -207,6 +210,19 @@ struct AppState {
     hotkey_error: Mutex<Option<String>>,
     /// The tray's "Open Grain Search (<hotkey>)" item, to update its text after a change.
     open_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+    /// Installed app: sets up the Python runtime from the installer's `engine` folder (setup.rs).
+    /// None in development, where the engine runs from the repository with `uv run`.
+    setup: Option<Arc<setup::Runner>>,
+}
+
+impl AppState {
+    /// The installed app still has setup work to do (first start, or an update with new libraries).
+    fn setup_pending(&self) -> bool {
+        self.setup
+            .as_ref()
+            .map(|r| !matches!(setup::check(&r.paths), Ok(setup::Needed::Nothing)))
+            .unwrap_or(false)
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -433,27 +449,71 @@ fn healthy(info: &ServiceInfo) -> bool {
     http(info, "GET", "/health") == Some(200)
 }
 
-fn spawn_service(s: &Settings, dir: &Path, dirs: &AppDirs) -> Result<Child, String> {
+/// How the engine is started.
+enum Launch {
+    /// Development: `uv run grain serve` in the repository's engine folder.
+    Dev(PathBuf),
+    /// Installed app: the runtime the setup window made (`python -m grain_search serve`).
+    Installed(setup::Paths),
+}
+
+/// Development settings (engine_dir, GRAIN_SEARCH_ENGINE_DIR) win; otherwise the installed
+/// runtime; otherwise the repository next to a development build.
+fn launch_mode(settings: &Settings, installed: Option<&setup::Paths>) -> Result<Launch, String> {
+    let env_dir = std::env::var("GRAIN_SEARCH_ENGINE_DIR").ok();
+    let explicit = settings.engine_dir.is_some() || env_dir.is_some();
+    if let (false, Some(paths)) = (explicit, installed) {
+        return match setup::check(paths) {
+            Ok(setup::Needed::Nothing) => Ok(Launch::Installed(paths.clone())),
+            Ok(_) => {
+                Err("Grain Search is still being set up: finish it in the setup window.".into())
+            }
+            Err(e) => Err(format!(
+                "The installation is incomplete ({e}). Reinstall Grain Search."
+            )),
+        };
+    }
+    let dir = find_engine_dir(
+        settings.engine_dir.as_deref(),
+        env_dir,
+        std::env::current_exe().ok(),
+    )?;
+    Ok(Launch::Dev(dir))
+}
+
+fn spawn_service(s: &Settings, launch: &Launch, dirs: &AppDirs) -> Result<Child, String> {
     let log_path = dirs.log_file();
     if let Some(logs) = log_path.parent() {
         fs::create_dir_all(logs).map_err(|e| format!("Cannot create {}: {e}", logs.display()))?;
     }
     let mut log = fs::File::create(&log_path)
         .map_err(|e| format!("Cannot write {}: {e}", log_path.display()))?;
-    let home =
-        std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from);
-    let uv = find_uv(s.uv.as_deref(), std::env::var_os("PATH"), home);
-    let _ = writeln!(
-        log,
-        "Starting: {} run grain serve  (in {})",
-        uv.display(),
-        dir.display()
-    );
+    let (mut cmd, what) = match launch {
+        Launch::Dev(dir) => {
+            let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                .map(PathBuf::from);
+            let uv = find_uv(s.uv.as_deref(), std::env::var_os("PATH"), home);
+            let mut cmd = Command::new(&uv);
+            cmd.args(["run", "grain", "serve"]).current_dir(dir);
+            (
+                cmd,
+                format!("{} run grain serve  (in {})", uv.display(), dir.display()),
+            )
+        }
+        Launch::Installed(paths) => {
+            let mut cmd = Command::new(paths.python());
+            cmd.args(["-m", "grain_search", "serve"])
+                .current_dir(&paths.runtime)
+                .env("PYTHONNOUSERSITE", "1"); // never mix in packages from the user's own Python
+            (
+                cmd,
+                format!("{} -m grain_search serve", paths.python().display()),
+            )
+        }
+    };
+    let _ = writeln!(log, "Starting: {what}");
     let log2 = log.try_clone().map_err(|e| e.to_string())?;
-    let mut cmd = Command::new(&uv);
-    cmd.args(["run", "grain", "serve"])
-        .current_dir(dir)
-        .env("PYTHONUNBUFFERED", "1")
+    cmd.env("PYTHONUNBUFFERED", "1")
         // the engine also watches this process and shuts down cleanly when it is gone
         .env("GRAIN_SEARCH_PARENT_PID", std::process::id().to_string())
         .stdin(Stdio::null())
@@ -465,12 +525,11 @@ fn spawn_service(s: &Settings, dir: &Path, dirs: &AppDirs) -> Result<Child, Stri
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    cmd.spawn().map_err(|e| {
-        format!(
-            "Could not start `{} run grain serve` in {}: {e}. Is uv installed? You can set \"uv\" to its full path in settings.json.",
-            uv.display(),
-            dir.display()
-        )
+    cmd.spawn().map_err(|e| match launch {
+        Launch::Dev(_) => format!(
+            "Could not start `{what}`: {e}. Is uv installed? You can set \"uv\" to its full path in settings.json."
+        ),
+        Launch::Installed(_) => format!("Could not start the search engine ({e}). Run the setup again: reinstall Grain Search."),
     })
 }
 
@@ -480,6 +539,7 @@ async fn ensure_service(state: tauri::State<'_, AppState>) -> Result<ServiceInfo
     let settings = state.settings.clone();
     let dirs = state.dirs.clone();
     let child = state.child.clone();
+    let installed = state.setup.as_ref().map(|r| r.paths.clone());
     tauri::async_runtime::spawn_blocking(move || {
         let service_file = dirs.service_file();
         if let Some(info) = read_info(&service_file) {
@@ -494,12 +554,8 @@ async fn ensure_service(state: tauri::State<'_, AppState>) -> Result<ServiceInfo
                 .map(|c| matches!(c.try_wait(), Ok(None)))
                 .unwrap_or(false);
             if !running {
-                let dir = find_engine_dir(
-                    settings.engine_dir.as_deref(),
-                    std::env::var("GRAIN_SEARCH_ENGINE_DIR").ok(),
-                    std::env::current_exe().ok(),
-                )?;
-                let started = spawn_service(&settings, &dir, &dirs)?;
+                let launch = launch_mode(&settings, installed.as_ref())?;
+                let started = spawn_service(&settings, &launch, &dirs)?;
                 #[cfg(windows)]
                 if let Err(e) = job::add_to_app_job(&started) {
                     // Not fatal: the engine still stops itself when the app is gone.
@@ -597,6 +653,10 @@ fn place(w: &WebviewWindow) {
 }
 
 fn show(app: &AppHandle) {
+    if app.state::<AppState>().setup_pending() {
+        let _ = show_setup(app); // nothing to search until the setup has finished
+        return;
+    }
     if let Some(w) = app.get_webview_window("main") {
         place(&w);
         let _ = w.show();
@@ -690,6 +750,71 @@ fn get_settings(state: tauri::State<'_, AppState>) -> UiSettings {
         glass: state.settings.glass,
         hotkey: state.hotkey.lock().unwrap().clone(),
         hotkey_error: state.hotkey_error.lock().unwrap().clone(),
+    }
+}
+
+// -- first-run setup (installed app) -----------------------------------------------------------
+/// The small "Setting up Grain Search" window (setup.rs does the work).
+fn show_setup(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(w) = app.get_webview_window(SETUP) {
+        let _ = w.unminimize();
+        w.show()?;
+        return w.set_focus();
+    }
+    WebviewWindowBuilder::new(app, SETUP, WebviewUrl::App("index.html".into()))
+        .title("Setting up Grain Search")
+        .initialization_script("window.__GRAIN_VIEW__ = 'setup';")
+        .inner_size(520.0, 540.0)
+        .resizable(false)
+        .center()
+        .build()
+        .map(|_| ())
+}
+
+#[tauri::command]
+fn setup_status(state: tauri::State<'_, AppState>) -> setup::Status {
+    state
+        .setup
+        .as_ref()
+        .map(|r| r.status.lock().unwrap().clone())
+        .unwrap_or_default()
+}
+
+/// Starts (or retries) the setup in the background; progress arrives as `grain://setup` events.
+/// When it has finished, the setup window closes and Settings opens (AI model -> Download).
+#[tauri::command]
+async fn setup_start(app: AppHandle) -> Result<(), String> {
+    let runner = app
+        .state::<AppState>()
+        .setup
+        .clone()
+        .ok_or("Nothing to set up: this is a development build.")?;
+    {
+        let mut st = runner.status.lock().unwrap();
+        if st.running {
+            return Ok(()); // already going (e.g. the window asked twice)
+        }
+        st.running = true;
+    }
+    std::thread::spawn(move || {
+        let report = |st: &setup::Status| {
+            let _ = app.emit("grain://setup", st);
+        };
+        if runner.run(&report).is_ok() {
+            std::thread::sleep(Duration::from_millis(900)); // let the last ✓ show
+            if let Some(w) = app.get_webview_window(SETUP) {
+                let _ = w.close();
+            }
+            let _ = show_settings(&app);
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn setup_cancel(state: tauri::State<'_, AppState>) {
+    if let Some(r) = &state.setup {
+        r.cancel();
     }
 }
 
@@ -889,6 +1014,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 };
             }
             "quit" => {
+                if let Some(r) = &app.state::<AppState>().setup {
+                    r.cancel(); // an unfinished setup continues next time
+                }
                 stop_service(app);
                 app.exit(0);
             }
@@ -937,6 +1065,28 @@ pub fn run() {
             let handle = app.handle().clone();
             let dirs = app_dirs();
             let settings = load_settings(&dirs);
+            // Installed app: the installer put an `engine` folder (runtime.json, uv, the engine's
+            // code) next to the program. Development builds keep running the repository's engine
+            // (set GRAIN_SEARCH_USE_RUNTIME=1 to try the installed way with `tauri dev`).
+            let bundle = app
+                .path()
+                .resource_dir()
+                .ok()
+                .map(|d| d.join("engine"))
+                .filter(|d| d.join("runtime.json").is_file());
+            let use_bundle = cfg!(not(debug_assertions))
+                || std::env::var_os("GRAIN_SEARCH_USE_RUNTIME").is_some();
+            let setup_runner = bundle.filter(|_| use_bundle).map(|bundle| {
+                Arc::new(setup::Runner {
+                    paths: setup::Paths {
+                        bundle,
+                        runtime: dirs.data.join("runtime"),
+                    },
+                    status: Arc::new(Mutex::new(setup::Status::default())),
+                    child: Arc::new(Mutex::new(None)),
+                    cancelled: Arc::new(Mutex::new(false)),
+                })
+            });
             app.manage(AppState {
                 settings: settings.clone(),
                 dirs,
@@ -944,6 +1094,7 @@ pub fn run() {
                 hotkey: Mutex::new(settings.hotkey.clone()),
                 hotkey_error: Mutex::new(None),
                 open_item: Mutex::new(None),
+                setup: setup_runner,
             });
 
             if let Err(e) = handle.global_shortcut().register(settings.hotkey.as_str()) {
@@ -963,8 +1114,11 @@ pub fn run() {
 
             build_tray(&handle)?;
 
-            // first manual launch: show the bar so you can see it works; autostart launches stay hidden
-            if !std::env::args().any(|a| a == "--hidden") {
+            // first manual launch: show the bar so you can see it works; autostart launches stay hidden.
+            // Setup still to do (first start after installing, or an update): always show it.
+            if handle.state::<AppState>().setup_pending() {
+                show_setup(&handle)?;
+            } else if !std::env::args().any(|a| a == "--hidden") {
                 show(&handle);
             }
             Ok(())
@@ -992,7 +1146,10 @@ pub fn run() {
             open_settings,
             pick_folder,
             set_height,
-            set_hotkey
+            set_hotkey,
+            setup_cancel,
+            setup_start,
+            setup_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running Grain Search");

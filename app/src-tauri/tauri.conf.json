@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:runtime && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -52,8 +52,12 @@
     ],
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerHooks": "./windows/hooks.nsh"
       }
+    },
+    "resources": {
+      "resources/engine/*": "engine/"
     }
   }
 }

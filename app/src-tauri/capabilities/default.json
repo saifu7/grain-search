@@ -1,10 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The search bar and the Settings window: events from the shell; everything else goes through our own commands",
+  "description": "The search bar, Settings and the first-run setup window: events from the shell; everything else goes through our own commands",
   "windows": [
     "main",
-    "settings"
+    "settings",
+    "setup"
   ],
   "permissions": [
     "core:default"

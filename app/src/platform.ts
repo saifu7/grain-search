@@ -1,6 +1,6 @@
 // Thin bridge to the Tauri shell. Uses the global `window.__TAURI__` (withGlobalTauri: true),
 // so the UI also runs in a normal browser for development: pass ?url=...&token=... there.
-import type { ServiceInfo, UiSettings } from "./types";
+import type { ServiceInfo, SetupStatus, UiSettings } from "./types";
 
 type TauriGlobal = {
   core: { invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T> };
@@ -42,6 +42,29 @@ export async function setHotkey(hotkey: string): Promise<string> {
 
 export function hideWindow(): void {
   tauri()?.core.invoke("hide_window").catch(() => {});
+}
+
+// -- first-run setup (installed app) ---------------------------------------------------------
+export async function setupStatus(): Promise<SetupStatus | null> {
+  const t = tauri();
+  return t ? t.core.invoke<SetupStatus>("setup_status") : null;
+}
+
+export async function setupStart(): Promise<void> {
+  await tauri()?.core.invoke("setup_start");
+}
+
+export async function setupCancel(): Promise<void> {
+  await tauri()?.core.invoke("setup_cancel");
+}
+
+/** Progress updates while the setup runs. Returns a function that stops listening. */
+export function onSetup(cb: (s: SetupStatus) => void): () => void {
+  const t = tauri();
+  if (!t) return () => {};
+  let un: (() => void) | undefined;
+  t.event.listen("grain://setup", (e) => cb(e.payload as SetupStatus)).then((f) => (un = f));
+  return () => un?.();
 }
 
 /** Resize the search window. Resolves once Windows has applied the new size (at once in a browser). */
