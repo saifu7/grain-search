@@ -101,6 +101,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: app/src-tauri
+      - uses: astral-sh/setup-uv@v7 # the installer bundles uv and the engine (scripts/runtime_bundle.py)
       - run: npm ci
       - run: npm run build
       - name: rustfmt

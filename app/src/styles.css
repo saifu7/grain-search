@@ -905,7 +905,8 @@ body:has(.settings-page) {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
 }
-.settings-page .btn {
+.settings-page .btn,
+.setup-page .btn {
   margin: 0;
   font-weight: 400;
   height: 32px;
@@ -919,19 +920,23 @@ body:has(.settings-page) {
   cursor: pointer;
   white-space: nowrap;
 }
-.settings-page .btn:hover:not(:disabled) {
+.settings-page .btn:hover:not(:disabled),
+.setup-page .btn:hover:not(:disabled) {
   background: var(--hover);
 }
-.settings-page .btn:disabled {
+.settings-page .btn:disabled,
+.setup-page .btn:disabled {
   opacity: 0.5;
   cursor: default;
 }
-.settings-page .btn.primary {
+.settings-page .btn.primary,
+.setup-page .btn.primary {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-text);
 }
-.settings-page .btn.primary:hover:not(:disabled) {
+.settings-page .btn.primary:hover:not(:disabled),
+.setup-page .btn.primary:hover:not(:disabled) {
   filter: brightness(1.08);
 }
 .settings-page .btn.ghost {
@@ -943,7 +948,8 @@ body:has(.settings-page) {
   color: var(--danger);
   background: var(--hover);
 }
-.settings-page .btn:focus-visible {
+.settings-page .btn:focus-visible,
+.setup-page .btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -989,4 +995,113 @@ body:has(.settings-page) {
 }
 .chev.open {
   transform: rotate(90deg);
+}
+
+/* -- first-run setup window ----------------------------------------------------- */
+body:has(.setup-page) {
+  background: var(--window);
+}
+.setup-page {
+  height: 100%;
+  overflow-y: auto;
+  background: var(--window);
+  font-size: 14px;
+  padding: 24px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  user-select: text;
+}
+.setup-page h1 {
+  font-size: 20px;
+  margin: 0;
+}
+.setup-page p {
+  margin: 0;
+  line-height: 1.45;
+}
+.setup-page .muted {
+  color: var(--muted);
+}
+.setup-page .small {
+  font-size: 12.5px;
+}
+.setup-gpu {
+  font-weight: 600;
+}
+.setup-gpu.cpu {
+  color: var(--paused);
+}
+.setup-steps {
+  list-style: none;
+  margin: 0;
+  padding: 10px 14px;
+  background: var(--card);
+  border: 1px solid var(--divider);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.setup-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+}
+.setup-step.running,
+.setup-step.done,
+.setup-step.skipped {
+  color: var(--text);
+}
+.setup-step.failed {
+  color: var(--danger);
+}
+.setup-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  font-weight: 700;
+}
+.setup-icon .spinner {
+  width: 14px;
+  height: 14px;
+}
+.setup-icon.done,
+.setup-icon.skipped {
+  color: var(--ok);
+}
+.setup-label {
+  flex: 1;
+}
+.setup-mb {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.setup-error {
+  color: var(--danger);
+}
+.setup-done {
+  color: var(--ok);
+  font-weight: 600;
+}
+.setup-actions {
+  display: flex;
+  gap: 8px;
+}
+.progress.indeterminate > div {
+  width: 30%;
+  animation: slide 1.4s ease-in-out infinite;
+}
+@keyframes slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
 }

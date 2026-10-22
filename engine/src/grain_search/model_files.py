@@ -26,6 +26,10 @@ from .config import Config, ModelCfg
 from .paths import app_paths
 
 DONE_MARKER = ".grain-complete.json"  # written after every file has arrived
+# Where the model's folder is, for the uninstaller (windows/hooks.nsh): it can't read config.json,
+# so this one line - the folder's full path, as UTF-16LE (no BOM, no newline: NSIS FileReadUTF16LE
+# reads it as one value, whatever letters the user name has).
+LOCATION_FILE = "model-location.txt"
 INFO_FILE = ".grain-download.json"  # total size, written when a download starts
 SPACE_MARGIN = 200 * 2**20  # keep this much free on top of the model
 
@@ -85,6 +89,17 @@ def use_location(model: ModelCfg, loc: Location) -> None:
     model.local_only = True
 
 
+def record_location(folder: Path, file: Path | None = None) -> None:
+    """Note where the model goes, so uninstalling with "Delete the application data" can remove it
+    even from a folder the user picked (only this model folder, never the folder around it)."""
+    file = file or app_paths().data_dir / LOCATION_FILE
+    try:
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(str(folder).encode("utf-16-le"))
+    except OSError:
+        pass  # only the uninstaller's clean-up depends on it
+
+
 def folder_bytes(folder: Path) -> int:
     total = 0
     for root, _dirs, files in os.walk(folder):
@@ -106,8 +121,9 @@ def _read_info(folder: Path) -> dict:
 class ModelDownloader:
     """Runs one download at a time in a child process and reports progress from the bytes on disk."""
 
-    def __init__(self, cfg: Config, on_done=lambda: None, command=None, cache_lookup=cached_copy):
+    def __init__(self, cfg: Config, on_done=lambda: None, command=None, cache_lookup=cached_copy, location_file=None):
         self.cfg = cfg
+        self.location_file = location_file  # None = %LOCALAPPDATA%\GrainSearch\model-location.txt
         self.cache_lookup = cache_lookup  # tests swap this: the developer's own cache may hold the model
         self.on_done = on_done
         self.command = command or self._python_command
@@ -154,6 +170,7 @@ class ModelDownloader:
                 return
             folder = model_folder(self.cfg.model)
             folder.mkdir(parents=True, exist_ok=True)
+            record_location(folder.resolve(), self.location_file)  # before any byte arrives
             self.error, self._cancelled = "", False
             kw: dict = {}
             if sys.platform == "win32":

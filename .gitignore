@@ -46,6 +46,8 @@ test-results/
 target/
 app/src-tauri/gen/
 app/src-tauri/resources/uv*.exe
+app/src-tauri/resources/engine/*
+!app/src-tauri/resources/engine/README.md
 
 # ── Models & large files ────────────────────────────────────────────────────
 *.safetensors

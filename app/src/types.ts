@@ -3,6 +3,23 @@ export interface ServiceInfo {
   token: string;
 }
 
+/** First-run setup of the installed app (setup.rs): progress shown in the setup window. */
+export interface SetupStep {
+  id: "gpu" | "disk" | "python" | "libraries" | "pytorch" | "engine";
+  label: string;
+  state: "pending" | "running" | "done" | "failed" | "skipped";
+}
+
+export interface SetupStatus {
+  running: boolean;
+  done: boolean;
+  steps: SetupStep[];
+  gpu: string | null;
+  build: "cuda" | "cpu" | null;
+  downloaded_mb: number;
+  error: string | null;
+}
+
 export interface UiSettings {
   glass: boolean; // Windows acrylic blur (square-ish corners) instead of macOS-style rounded bar
   hotkey: string;

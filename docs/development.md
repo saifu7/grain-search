@@ -59,8 +59,22 @@ npm run build
 cd src-tauri && cargo fmt --check && cargo clippy -- -D warnings && cargo test
 ```
 
-A local installer (unsigned, for testing): `npm run tauri build`. The output goes to
-`app\src-tauri\target\release\bundle\nsis\`.
+A local installer (unsigned, for testing): `npm run tauri build`. It first runs
+`npm run build:runtime` (`scripts/runtime_bundle.py`: the engine wheel, pinned `requirements.txt`,
+`runtime.json` and your `uv` into `app\src-tauri\resources\engine\`, git-ignored), then builds the
+installer into `app\src-tauri\target\release\bundle\nsis\`. Needs `uv` and internet.
+
+**Uninstalling** (`app\src-tauri\windows\hooks.nsh`, run by the uninstaller): always deletes
+`%LOCALAPPDATA%\GrainSearch\runtime`; with "Delete the application data" ticked also the model (its
+folder is read from `%LOCALAPPDATA%\GrainSearch\model-location.txt`, written by the engine),
+`%LOCALAPPDATA%\GrainSearch` and `%APPDATA%\GrainSearch`. Automatic updates (`/UPDATE`) keep all of it.
+Installing a new version with "uninstall the old version first" counts as an uninstall: the setup
+window then downloads the runtime again.
+
+**Trying the first-run setup:** install the build, or run `tauri dev` with
+`GRAIN_SEARCH_USE_RUNTIME=1` after `npm run build:runtime`. To see the setup window again, rename
+`%LOCALAPPDATA%\GrainSearch\runtime` (deleting it also works; uv's downloads are cached inside it,
+so a rename keeps them for later).
 
 ## Running next to an older copy
 The service listens on a free port chosen at start (written to `service.json`), so it never

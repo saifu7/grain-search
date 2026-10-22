@@ -118,7 +118,13 @@ class DownloaderTest(Tmp):
         cfg = Config(roots=[], data_dir=self.tmp / "index")
         cfg.model = ModelCfg(id=repo, dir=str(self.tmp / "models"))
         done = threading.Event()
-        d = ModelDownloader(cfg, on_done=done.set, command=self.command, cache_lookup=lambda r: None)
+        d = ModelDownloader(
+            cfg,
+            on_done=done.set,
+            command=self.command,
+            cache_lookup=lambda r: None,
+            location_file=self.tmp / "model-location.txt",
+        )
         return d, done
 
     def test_progress_then_ready(self):
@@ -133,6 +139,17 @@ class DownloaderTest(Tmp):
         self.assertTrue(done.wait(15), "on_done runs when every file is there")
         self.assertEqual(d.status()["state"], "ready")
         self.assertEqual(d.status()["source"], "folder")
+
+    def test_location_is_recorded_for_the_uninstaller(self):
+        d, done = self.make()
+        d.start()
+        raw = (self.tmp / "model-location.txt").read_bytes()
+        self.assertFalse(raw.startswith(b"\xff\xfe"), "no BOM: the uninstaller reads the bytes as they are")
+        path = raw.decode("utf-16-le")
+        self.assertEqual(Path(path), model_folder(d.cfg.model).resolve())
+        self.assertTrue(path.endswith("embeddinggemma-2"), "only the model's own folder")
+        self.assertNotIn("\n", path)
+        done.wait(15)
 
     def test_error_is_reported(self):
         d, done = self.make("google/x-fails")
@@ -222,6 +239,7 @@ class ServiceWithoutModelTest(Tmp):
         self.svc = SearchService(self.cfg, self.model, background=True, watch=False, token="t")
         self.svc.model_files.command = self.command
         self.svc.model_files.cache_lookup = lambda r: None  # ignore a real cached copy on this PC
+        self.svc.model_files.location_file = self.tmp / "model-location.txt"  # not the real profile
 
         def downloaded():  # the fake model "arrives" when the fake download finishes
             self.model.available = True

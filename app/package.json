@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:runtime": "uv run --no-project python ../scripts/runtime_bundle.py",
     "typecheck": "tsc --noEmit",
     "tauri": "tauri"
   },

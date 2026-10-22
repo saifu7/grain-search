@@ -51,9 +51,14 @@ never flashes empty, window resized once before rendering, reserved space for im
 A Playwright test measures layout shift (target CLS < 0.02) on every pull request.
 
 ### Phase 4: Installer and first-run runtime
-~15 MB per-user NSIS installer (no admin rights). On first run it sets up Python and PyTorch with
-the bundled `uv`: the CUDA build for NVIDIA GPUs, the CPU build otherwise. It then downloads
-EmbeddingGemma 2, resumably. The uninstaller offers to remove the index and models too.
+~15 MB per-user NSIS installer (no admin rights). On first run a small setup window sets up Python
+and PyTorch with the bundled `uv`: the CUDA build for NVIDIA GPUs, the CPU build otherwise, at the
+versions in `uv.lock`. Then Settings → AI model downloads EmbeddingGemma 2, resumably.
+- ✅ Step 1: runtime bundle (`scripts/runtime_bundle.py`), setup window (GPU and disk check, uv steps,
+  progress, Cancel, Retry), the installed app runs the engine from the runtime.
+- ✅ Uninstall: always removes the runtime; "Delete the application data" removes every trace,
+  including a model folder the user moved (`app/src-tauri/windows/hooks.nsh`).
+- Step 2: a CI job installs the build on a clean Windows machine and runs the setup with the CPU build.
 
 ### Phase 5: Release quality
 Code signing (no SmartScreen "unknown publisher"), signed auto-updates from GitHub Releases with a
