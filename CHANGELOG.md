@@ -88,3 +88,8 @@ index format; the app migrates or rebuilds automatically and the notes say so.
   stay open when it quits.
 
 [Unreleased]: https://github.com/saifu7/grain-search/commits/main
+## [Unreleased]
+
+## [0.1.0-alpha.2] - 2026-10-25
+### Added
+- **The installer works on any Windows PC** …   (what's already there)
