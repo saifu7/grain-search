@@ -369,7 +369,7 @@ sequenceDiagram
     A->>A: nvidia-smi → GPU name? CUDA build : CPU build
     A->>A: free space check (~7 GB CUDA / ~2 GB CPU)
     A->>UV: uv venv (Python 3.12) → runtime\.venv
-    A->>UV: uv pip install torch==… torchvision==… (CUDA or CPU site)
+    A->>UV: uv pip install torch==2.11.0+cu128 … --index <PyTorch site> (or +cpu)
     A->>UV: uv pip install -r requirements.txt (keeps that PyTorch)
     A->>A: CUDA build? ask the installed torch, fail with Retry if it's the CPU one
     A->>UV: uv pip install grain_search-….whl
@@ -383,9 +383,14 @@ only the wheel changed (an update without new libraries) → reinstall just the 
 new fingerprint, or a `setup.json` from an older setup (`SETUP_REV` in `setup.rs`) → the setup
 window runs again (downloads already in `runtime\cache` are reused).
 
-PyTorch is installed **before** the libraries on purpose: `sentence-transformers` depends on
-`torch`, and if it isn't there yet uv takes it from PyPI, which only has the CPU build for Windows;
-the PyTorch step would then see `torch 2.11.0` as already installed and skip it.
+PyPI also has `torch 2.11.0`, and on Windows that is the CPU build, so the setup is careful to get
+PyTorch from PyTorch's own site:
+- it asks for the exact build (`torch==2.11.0+cu128`), with PyTorch's site as `--index` and PyPI as
+  `--default-index`. (uv searches an `--extra-index-url` *before* `--index-url`, the opposite of
+  pip: with `--extra-index-url pypi` the plain PyPI build won.)
+- PyTorch is installed **before** the libraries: `sentence-transformers` depends on `torch`, and if
+  it isn't there yet uv takes it from PyPI.
+- on a GPU PC, after both steps, the installed PyTorch is asked whether it is the CUDA build.
 Development builds keep using `uv run` in the repository (`GRAIN_SEARCH_USE_RUNTIME=1` tries the
 installed way).
 
