@@ -162,7 +162,7 @@ class GemmaEmbedder:
                 pass
         self.device_desc = f"{device} / {str(dtype).replace('torch.', '')}"
         if device == "cpu" and getattr(torch.version, "cuda", None) is None:
-            self.device_desc += " (CPU-only PyTorch installed: run `uv sync` to get the GPU build)"
+            self.device_desc += " (CPU-only build of PyTorch installed)"
         if device == "cuda":
             try:
                 name = torch.cuda.get_device_name(0)
