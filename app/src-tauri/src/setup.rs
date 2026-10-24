@@ -13,10 +13,14 @@
 //!   6. engine        `uv pip install grain_search-….whl`
 //!   7. setup.json    what was installed, so later starts (and updates) know what to redo
 //!
-//! PyTorch must come before the libraries: sentence-transformers needs torch, and if it isn't
-//! there yet uv takes it from PyPI, which only has the CPU build for Windows. The PyTorch step
-//! would then find "torch 2.11.0" already installed and do nothing. After a CUDA setup we also ask
-//! the installed PyTorch whether it really is the CUDA build.
+//! Getting the GPU build of PyTorch takes care, because PyPI also has a "torch 2.11.0" and on
+//! Windows it is the CPU build:
+//! - the PyTorch step asks for the exact build (`torch==2.11.0+cu128`), with PyTorch's site as
+//!   `--index` and PyPI only as `--default-index` (uv searches `--extra-index-url` *before*
+//!   `--index-url`, which is how the first version ended up with PyPI's CPU build);
+//! - it runs before the libraries: sentence-transformers needs torch, and if it isn't there yet uv
+//!   takes it from PyPI;
+//! - after both steps, on a GPU PC, we ask the installed PyTorch whether it is the CUDA build.
 //!
 //! uv keeps every download in runtime\cache, so Retry only fetches what is still missing.
 //! A wrong GPU guess is harmless: the CUDA build also runs on the CPU.
@@ -321,6 +325,12 @@ pub fn initial_steps() -> Vec<Step> {
     .collect()
 }
 
+/// PyTorch's name for a build, from the last part of its download site:
+/// ".../whl/cu128" -> "cu128", ".../whl/cpu" -> "cpu". Versions there are e.g. 2.11.0+cu128.
+pub fn build_tag(index: &str) -> &str {
+    index.trim_end_matches('/').rsplit('/').next().unwrap_or("")
+}
+
 /// The uv command for one install step.
 pub fn uv_args(
     step: &str,
@@ -358,22 +368,29 @@ pub fn uv_args(
                 .to_string_lossy()
                 .into_owned(),
         ],
-        "pytorch" => vec![
-            s("pip"),
-            s("install"),
-            s("--python"),
-            py,
-            format!("torch=={}", info.torch),
-            format!("torchvision=={}", info.torchvision),
-            s("--index-url"),
-            if cuda {
-                info.torch_index.cuda.clone()
+        "pytorch" => {
+            let index = if cuda {
+                &info.torch_index.cuda
             } else {
-                info.torch_index.cpu.clone()
-            },
-            s("--extra-index-url"),
-            s("https://pypi.org/simple"),
-        ],
+                &info.torch_index.cpu
+            };
+            let tag = build_tag(index);
+            vec![
+                s("pip"),
+                s("install"),
+                s("--python"),
+                py,
+                // the exact build (2.11.0+cu128), so a plain 2.11.0 from PyPI can never satisfy it
+                format!("torch=={}+{tag}", info.torch),
+                format!("torchvision=={}+{tag}", info.torchvision),
+                // uv takes a package from the first index that has it, and `--index` comes before
+                // `--default-index`. (Not `--extra-index-url pypi`: uv searches that one *first*.)
+                s("--index"),
+                index.clone(),
+                s("--default-index"),
+                s("https://pypi.org/simple"),
+            ]
+        }
         "engine" => vec![
             s("pip"),
             s("install"),
@@ -517,8 +534,8 @@ impl Runner {
             if let Err(msg) = self.run_uv(report, &uv_args(id, &info, &self.paths, cuda, full)) {
                 return self.fail(report, id, msg);
             }
-            if id == "libraries" && full && cuda {
-                // the libraries must not have swapped in another PyTorch build
+            if (id == "pytorch" || id == "libraries") && full && cuda {
+                // after PyTorch: did the GPU build arrive? after the libraries: is it still there?
                 if let Some(build) = torch_build(&self.paths.python()) {
                     if build == "cpu" {
                         return self.fail(
@@ -730,11 +747,29 @@ mod tests {
             "{libs}"
         );
         let gpu = joined(uv_args("pytorch", &i, &p, true, true));
-        assert!(gpu.contains("torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128"), "{gpu}");
+        assert!(
+            gpu.contains(
+                "torch==2.11.0+cu128 torchvision==0.26.0+cu128 \
+                 --index https://download.pytorch.org/whl/cu128 \
+                 --default-index https://pypi.org/simple"
+            ),
+            "{gpu}"
+        );
+        assert!(
+            !gpu.contains("--extra-index-url"),
+            "uv would search PyPI first"
+        );
         let cpu = joined(uv_args("pytorch", &i, &p, false, true));
         assert!(
-            cpu.contains("--index-url https://download.pytorch.org/whl/cpu"),
+            cpu.contains(
+                "torch==2.11.0+cpu torchvision==0.26.0+cpu \
+                 --index https://download.pytorch.org/whl/cpu"
+            ),
             "{cpu}"
+        );
+        assert_eq!(
+            build_tag("https://download.pytorch.org/whl/cu128/"),
+            "cu128"
         );
         let eng = joined(uv_args("engine", &i, &p, true, true));
         assert!(
