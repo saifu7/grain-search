@@ -317,8 +317,11 @@ class GpuFullTest(unittest.TestCase):
             cfg.excludes = [
                 "*/node_modules/*"
             ]  # temp dirs live under AppData on Windows, which the default excludes skip
-            old = service.GPU_FULL_RETRY_S
+            old, old_free = service.GPU_FULL_RETRY_S, service.free_gpu_memory
             service.GPU_FULL_RETRY_S = 1.0
+            # The "GPU" here is fake. The real free_gpu_memory imports PyTorch and starts CUDA, which
+            # can take longer than this whole test on a PC with the CUDA build (cold start).
+            service.free_gpu_memory = lambda: None
             ix = BackgroundIndexer(cfg, LockedEmbedder(FlakyGpuEmbedder(fail=1)), watch=False)
             seen_pause = []
             ix.start()
@@ -328,7 +331,7 @@ class GpuFullTest(unittest.TestCase):
                 )
             finally:
                 ix.stop()
-                service.GPU_FULL_RETRY_S = old
+                service.GPU_FULL_RETRY_S, service.free_gpu_memory = old, old_free
             self.assertTrue(finished, ix.state.last_error)
             self.assertTrue(any("GPU memory full" in r for r in seen_pause), seen_pause[-5:])
             self.assertGreater(ix.last_report["chunks"], 5)

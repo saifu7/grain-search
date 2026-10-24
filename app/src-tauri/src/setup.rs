@@ -8,10 +8,15 @@
 //!   1. GPU check     nvidia-smi names the NVIDIA GPU -> PyTorch's CUDA build, otherwise the CPU build
 //!   2. disk check    enough free space for that build
 //!   3. Python        `uv venv` downloads Python into runtime\python and makes runtime\.venv
-//!   4. libraries     `uv pip install -r requirements.txt`
-//!   5. PyTorch       `uv pip install torch==… torchvision==…` from PyTorch's CUDA or CPU site
+//!   4. PyTorch       `uv pip install torch==… torchvision==…` from PyTorch's CUDA or CPU site
+//!   5. libraries     `uv pip install -r requirements.txt` (keeps the PyTorch from step 4)
 //!   6. engine        `uv pip install grain_search-….whl`
 //!   7. setup.json    what was installed, so later starts (and updates) know what to redo
+//!
+//! PyTorch must come before the libraries: sentence-transformers needs torch, and if it isn't
+//! there yet uv takes it from PyPI, which only has the CPU build for Windows. The PyTorch step
+//! would then find "torch 2.11.0" already installed and do nothing. After a CUDA setup we also ask
+//! the installed PyTorch whether it really is the CUDA build.
 //!
 //! uv keeps every download in runtime\cache, so Retry only fetches what is still missing.
 //! A wrong GPU guess is harmless: the CUDA build also runs on the CPU.
@@ -49,7 +54,18 @@ pub struct Marker {
     /// "cuda" | "cpu": only for people reading setup.json (troubleshooting)
     #[allow(dead_code)]
     pub build: String,
+    /// SETUP_REV of the setup that wrote it (missing in files from before it existed = 0).
+    #[serde(default)]
+    pub setup: u32,
 }
+
+/// Raise when the setup steps change in a way that existing installs must redo: a lower number in
+/// setup.json means a full setup on the next start.
+/// 1 = first version (installed the CPU PyTorch on GPU PCs); 2 = PyTorch before the libraries.
+pub const SETUP_REV: u32 = 2;
+
+/// The uv steps, in order.
+pub const INSTALL_STEPS: [&str; 4] = ["python", "pytorch", "libraries", "engine"];
 
 /// Where everything is.
 #[derive(Clone, Debug)]
@@ -107,7 +123,7 @@ pub fn needed(
     python_exists: bool,
 ) -> Needed {
     match marker {
-        Some(m) if python_exists && m.fingerprint == fingerprint => {
+        Some(m) if python_exists && m.fingerprint == fingerprint && m.setup >= SETUP_REV => {
             if m.wheel == wheel {
                 Needed::Nothing
             } else {
@@ -157,6 +173,29 @@ pub fn detect_gpu() -> Option<String> {
         return None;
     }
     parse_gpu(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// "cuda" or "cpu": which PyTorch build `python` has (None if it can't be asked).
+fn torch_build(python: &Path) -> Option<&'static str> {
+    let out = hidden(Command::new(python).args([
+        "-c",
+        "import torch; print('cuda' if torch.version.cuda else 'cpu')",
+    ]))
+    .stdin(Stdio::null())
+    .output()
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_torch_build(&String::from_utf8_lossy(&out.stdout))
+}
+
+pub fn parse_torch_build(stdout: &str) -> Option<&'static str> {
+    match stdout.trim() {
+        "cuda" => Some("cuda"),
+        "cpu" => Some("cpu"),
+        _ => None,
+    }
 }
 
 const GB: u64 = 1024 * 1024 * 1024;
@@ -269,8 +308,8 @@ pub fn initial_steps() -> Vec<Step> {
         ("gpu", "Check for an NVIDIA GPU"),
         ("disk", "Check free disk space"),
         ("python", "Download Python"),
-        ("libraries", "Download libraries"),
         ("pytorch", "Download PyTorch"),
+        ("libraries", "Download libraries"),
         ("engine", "Install Grain Search's engine"),
     ]
     .into_iter()
@@ -466,7 +505,7 @@ impl Runner {
         let _ = std::fs::remove_file(self.paths.marker()); // not complete until step 7
 
         // 3-6. uv
-        for id in ["python", "libraries", "pytorch", "engine"] {
+        for id in INSTALL_STEPS {
             if !full && id != "engine" {
                 self.step_state(report, id, "skipped");
                 continue;
@@ -478,6 +517,20 @@ impl Runner {
             if let Err(msg) = self.run_uv(report, &uv_args(id, &info, &self.paths, cuda, full)) {
                 return self.fail(report, id, msg);
             }
+            if id == "libraries" && full && cuda {
+                // the libraries must not have swapped in another PyTorch build
+                if let Some(build) = torch_build(&self.paths.python()) {
+                    if build == "cpu" {
+                        return self.fail(
+                            report,
+                            id,
+                            "PyTorch's GPU build didn't install (the CPU build is there instead). \
+                             Click Retry; if it happens again, please report it."
+                                .into(),
+                        );
+                    }
+                }
+            }
             self.step_state(report, id, "done");
         }
 
@@ -486,6 +539,7 @@ impl Runner {
             fingerprint: info.fingerprint.clone(),
             wheel: info.wheel.clone(),
             build: (if cuda { "cuda" } else { "cpu" }).into(),
+            setup: SETUP_REV,
         };
         let text = serde_json::to_string_pretty(&marker).map_err(|e| e.to_string())?;
         std::fs::write(self.paths.marker(), text).map_err(|e| e.to_string())?;
@@ -593,6 +647,7 @@ mod tests {
             fingerprint: "abc".into(),
             wheel: "w1".into(),
             build: "cuda".into(),
+            setup: SETUP_REV,
         };
         assert_eq!(
             needed("abc", "w1", None, true),
@@ -615,6 +670,33 @@ mod tests {
             Needed::Full,
             "new libraries"
         );
+        let old = Marker { setup: 1, ..m };
+        assert_eq!(
+            needed("abc", "w1", Some(&old), true),
+            Needed::Full,
+            "set up by an older, broken setup"
+        );
+        let from_file: Marker =
+            serde_json::from_str(r#"{"fingerprint":"abc","wheel":"w1","build":"cpu"}"#).unwrap();
+        assert_eq!(from_file.setup, 0, "setup.json from before SETUP_REV");
+    }
+
+    #[test]
+    fn pytorch_before_the_libraries() {
+        let pos = |id| INSTALL_STEPS.iter().position(|s| *s == id).unwrap();
+        assert!(
+            pos("pytorch") < pos("libraries"),
+            "the libraries would pull the CPU PyTorch from PyPI"
+        );
+        let ui: Vec<_> = initial_steps().into_iter().map(|s| s.id).collect();
+        assert_eq!(
+            &ui[2..],
+            &INSTALL_STEPS,
+            "the window lists the steps in the order they run"
+        );
+        assert_eq!(parse_torch_build("cuda\r\n"), Some("cuda"));
+        assert_eq!(parse_torch_build("cpu\n"), Some("cpu"));
+        assert_eq!(parse_torch_build(""), None);
     }
 
     #[test]
